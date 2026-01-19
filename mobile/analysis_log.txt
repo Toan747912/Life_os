@@ -1,0 +1,8 @@
+Analyzing mobile...                                             
+
+  error - Target of URI doesn't exist: '../data/models/entity_model.dart' - lib\domain\repositories\entity_repository.dart:1:8 - uri_does_not_exist
+  error - The name 'UnifiedEntity' isn't a type, so it can't be used as a type argument - lib\domain\repositories\entity_repository.dart:4:15 - non_type_as_type_argument
+  error - The name 'UnifiedEntity' isn't a type, so it can't be used as a type argument - lib\domain\repositories\entity_repository.dart:5:10 - non_type_as_type_argument
+  error - Target of URI doesn't exist: '../../domain/repositories/entity_repository.dart' - lib\presentation\bloc\entity\entity_bloc.dart:2:8 - uri_does_not_exist
+  error - Undefined class 'EntityRepository' - lib\presentation\bloc\entity\entity_bloc.dart:7:9 - undefined_class
+
