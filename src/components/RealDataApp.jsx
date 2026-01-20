@@ -1,0 +1,567 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+
+// =======================
+// 1. SHARED & UTILS
+// =======================
+const speak = (text, rate = 1.0) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US'; utterance.rate = rate;
+    const voices = window.speechSynthesis.getVoices();
+    const preferredVoice = voices.find(v => v.name.includes("Google US") || v.name.includes("Samantha"));
+    if (preferredVoice) utterance.voice = preferredVoice;
+    window.speechSynthesis.speak(utterance);
+};
+
+// Question Navigator (Glass Bar)
+const QuestionNavigator = ({ total, current, onChange, statusMap = {} }) => {
+    // Scroll to active item
+    const scrollRef = useRef(null);
+    useEffect(() => {
+        if (scrollRef.current) {
+            const activeEl = scrollRef.current.children[current];
+            if (activeEl) {
+                activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+            }
+        }
+    }, [current]);
+
+    return (
+        <div className="w-full shrink-0 z-30 flex flex-col items-center justify-center pb-4 pt-2 glass-panel border-t border-white/40 bg-white/60">
+            {/* Legend - Minimalist */}
+            <div className="flex gap-4 md:gap-6 text-[10px] md:text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-300"></span> Chưa làm</div>
+                <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500 shadow-blue-500/50 shadow-[0_0_8px]"></span> Đang làm</div>
+                <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-green-500 shadow-green-500/50 shadow-[0_0_8px]"></span> Đúng</div>
+                <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500 shadow-red-500/50 shadow-[0_0_8px]"></span> Sai</div>
+            </div>
+
+            <div ref={scrollRef} className="flex gap-2 overflow-x-auto px-4 py-2 w-full max-w-4xl mx-auto no-scrollbar mask-linear-fade snap-x">
+                {Array.from({ length: total }).map((_, i) => {
+                    const status = statusMap[i];
+                    const isCurrent = i === current;
+
+                    let baseClass = "snap-center w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm transition-all duration-300 shrink-0 border-2 ";
+
+                    if (status === 'CORRECT') baseClass += "bg-green-500 border-green-400 text-white shadow-lg shadow-green-500/30";
+                    else if (status === 'WRONG' || status === 'TIMEOUT') baseClass += "bg-red-500 border-red-400 text-white shadow-lg shadow-red-500/30";
+                    else if (isCurrent) baseClass += "bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-500/40 scale-110 -translate-y-1 z-10";
+                    else baseClass += "bg-white/50 border-white text-slate-400 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200";
+
+                    return (
+                        <button key={i} onClick={() => onChange(i)} className={baseClass}>
+                            {i + 1}
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+// Ready Overlay (Glassmorphism & Animated)
+const ReadyScreen = ({ onReady, sentenceIndex, level = 1, onLevelChange = () => console.warn("Missing onLevelChange") }) => {
+    const descriptions = {
+        1: "🌟 Khởi động: Thời gian thoải mái",
+        2: "🔥 Tăng tốc: Giới hạn thời gian chuẩn",
+        3: "⚡ Áp lực: Thời gian cực ngắn!",
+        4: "🎧 Thính giác: Giới hạn nghe lại từ"
+    };
+
+    return (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center animate-fade-in p-6 bg-slate-900/20 backdrop-blur-sm">
+            <div className="glass-panel p-10 rounded-[3rem] shadow-2xl max-w-lg w-full relative overflow-hidden flex flex-col items-center animate-slide-up">
+
+                {/* Decorative Background Blobs */}
+                <div className="absolute -top-20 -right-20 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl animate-pulse"></div>
+                <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl animate-pulse delay-700"></div>
+
+                <h2 className="text-5xl font-extrabold gradient-text mb-2 tracking-tighter relative z-10">Câu {sentenceIndex + 1}</h2>
+                <p className="text-slate-500 mb-8 font-medium relative z-10 text-lg">Chọn mức độ thử thách:</p>
+
+                {/* Level Selector */}
+                <div className="flex gap-4 justify-center mb-8 relative z-10">
+                    {[1, 2, 3, 4].map(l => (
+                        <button key={l} onClick={() => onLevelChange(l)}
+                            className={`w-16 h-16 rounded-2xl font-bold text-2xl transition-all border flex items-center justify-center relative overflow-hidden group
+                            ${level === l ? 'bg-indigo-600 border-indigo-600 text-white shadow-xl scale-110 shadow-indigo-300' : 'bg-white/50 border-slate-200 text-slate-400 hover:border-indigo-300 hover:text-indigo-600'}`}>
+                            {level === l && <div className="absolute inset-0 bg-white/20 animate-pulse"></div>}
+                            {l}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Level Description */}
+                <div className="mb-10 relative z-10 h-8 flex items-center justify-center">
+                    <span key={level} className="text-indigo-600 font-bold bg-indigo-50/80 px-6 py-2 rounded-full text-sm animate-fade-in border border-indigo-100 shadow-sm">
+                        {descriptions[level]}
+                    </span>
+                </div>
+
+                <button onClick={onReady} className="w-full py-5 bg-linear-to-r from-indigo-600 to-purple-600 text-white rounded-2xl font-bold shadow-xl shadow-indigo-200 hover:shadow-2xl hover:scale-[1.02] active:scale-[0.98] transition-all text-xl relative z-10 overflow-hidden group">
+                    <div className="absolute inset-0 bg-white/20 -translate-x-full group-hover:translate-x-full transition-transform duration-500"></div>
+                    Sẵn sàng! 🚀
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// Main Layout Wrapper
+const GameLayout = ({ children, navigator, onBack }) => (
+    <div className="flex flex-col h-screen font-sans overflow-hidden relative selection:bg-indigo-100 selection:text-indigo-700 bg-slate-50">
+
+        {/* Dynamic Background */}
+        <div className="absolute inset-0 bg-linear-to-br from-indigo-50 via-white to-purple-50 opacity-60 -z-20"></div>
+        <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10">
+            <div className="absolute top-[-10%] left-[-10%] w-[60vh] h-[60vh] bg-purple-300/20 rounded-full blur-[100px] animate-float"></div>
+            <div className="absolute bottom-[-10%] right-[-10%] w-[60vh] h-[60vh] bg-indigo-300/20 rounded-full blur-[100px] animate-float" style={{ animationDelay: '3s' }}></div>
+        </div>
+
+        {/* Top Bar - Fixed Height */}
+        <div className="h-16 shrink-0 flex items-center justify-between px-4 md:px-8 z-20 border-b border-white/40 bg-white/30 backdrop-blur-sm">
+            <button onClick={onBack} className="group flex items-center gap-2 text-slate-500 hover:text-red-500 font-bold transition-all px-3 py-1.5 rounded-xl hover:bg-red-50">
+                <span className="group-hover:-translate-x-1 transition-transform">←</span> <span>Thoát</span>
+            </button>
+            <div className="hidden md:block font-bold text-slate-400 tracking-widest uppercase text-[10px] bg-white/60 px-3 py-1 rounded-full border border-white/50 shadow-sm">Learning Station</div>
+        </div>
+
+        {/* Main Content (Occupies remaining space, centered) */}
+        <div className="flex-1 flex flex-col justify-center items-center relative z-10 overflow-y-auto px-4 py-2 w-full">
+            {children}
+        </div>
+
+        {/* Bottom Navigator - Fixed Height */}
+        {navigator}
+    </div>
+);
+
+// =======================
+// 2A. LISTEN MODE
+// =======================
+const ListenMode = ({ sentences, onBack }) => {
+    const [idx, setIdx] = useState(0);
+
+    useEffect(() => {
+        if (sentences[idx]) speak(sentences[idx].content);
+    }, [idx, sentences]);
+
+    if (!sentences || sentences.length === 0) return <div>No data</div>;
+    const s = sentences[idx];
+
+    return (
+        <GameLayout onBack={onBack}
+            navigator={<QuestionNavigator total={sentences.length} current={idx} onChange={setIdx} />}
+        >
+            <div className="w-full max-w-2xl mx-auto flex flex-col items-center justify-center h-full max-h-[70vh]">
+                <div className="w-full glass-panel rounded-[2rem] shadow-xl p-6 md:p-10 text-center relative flex flex-col items-center justify-between h-full bg-white/80">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500"></div>
+
+                    <h2 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-4 shrink-0">Luyện Nghe Thụ Động</h2>
+
+                    <div className="flex-1 flex items-center justify-center w-full overflow-y-auto custom-scrollbar my-2">
+                        <p className="text-2xl md:text-4xl font-medium text-slate-800 leading-snug font-serif tracking-wide px-2 drop-shadow-sm text-balance">
+                            "{s.content}"
+                        </p>
+                    </div>
+
+                    <div className="shrink-0 mt-6 md:mt-10 pb-2">
+                        <button onClick={() => speak(s.content)}
+                            className="w-20 h-20 md:w-24 md:h-24 rounded-full bg-linear-to-tr from-indigo-500 to-blue-600 text-white flex items-center justify-center shadow-xl shadow-indigo-300 hover:scale-110 active:scale-95 transition-all mx-auto animate-pulse-soft group border-4 border-white/20">
+                            <span className="text-3xl md:text-4xl group-hover:scale-110 transition-transform">🔊</span>
+                        </button>
+                        <p className="text-xs text-slate-400 mt-3 font-medium">Nghe lại</p>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-4 mt-6 shrink-0 z-20">
+                    <button onClick={() => idx > 0 && setIdx(i => i - 1)} disabled={idx === 0} className="w-12 h-12 rounded-full glass-panel border border-slate-200 text-slate-500 flex items-center justify-center hover:bg-white hover:text-indigo-600 hover:shadow-lg disabled:opacity-30 disabled:pointer-events-none transition-all">←</button>
+                    <div className="text-slate-500 font-mono font-bold text-sm bg-white/50 px-3 py-1 rounded-lg backdrop-blur-sm border border-white/60">{String(idx + 1).padStart(2, '0')} / {sentences.length}</div>
+                    <button onClick={() => idx < sentences.length - 1 && setIdx(i => i + 1)} disabled={idx === sentences.length - 1} className="w-12 h-12 rounded-full glass-panel border border-slate-200 text-slate-500 flex items-center justify-center hover:bg-white hover:text-indigo-600 hover:shadow-lg disabled:opacity-30 disabled:pointer-events-none transition-all">→</button>
+                </div>
+            </div>
+        </GameLayout>
+    );
+};
+
+// =======================
+// 2B. FILL MODE
+// =======================
+const FillMode = ({ sentences, onBack }) => {
+    const [idx, setIdx] = useState(0);
+    const [hiddenIndex, setHiddenIndex] = useState(-1);
+    const [words, setWords] = useState([]);
+    const [input, setInput] = useState("");
+    const [status, setStatus] = useState("PENDING");
+    const [progressMap, setProgressMap] = useState({});
+
+    useEffect(() => {
+        if (sentences[idx]) {
+            const w = sentences[idx].content.split(/\s+/);
+            setWords(w);
+            const candidates = w.map((x, i) => ({ w: x, i })).filter(x => x.w.length > 2);
+            const target = candidates.length > 0 ? candidates[Math.floor(Math.random() * candidates.length)] : { i: 0 };
+            setHiddenIndex(target.i);
+            setInput("");
+            setStatus(progressMap[idx] || "PENDING");
+        }
+    }, [idx, sentences]);
+
+    const check = () => {
+        const correctWord = words[hiddenIndex].replace(/[.,!?;:]/g, "");
+        if (input.trim().toLowerCase() === correctWord.toLowerCase()) {
+            speak("Correct"); setStatus("CORRECT");
+            setProgressMap(prev => ({ ...prev, [idx]: 'CORRECT' }));
+        } else {
+            speak("Try again"); setStatus("WRONG");
+            setProgressMap(prev => ({ ...prev, [idx]: 'WRONG' }));
+        }
+    };
+
+    return (
+        <GameLayout onBack={onBack}
+            navigator={<QuestionNavigator total={sentences.length} current={idx} onChange={setIdx} statusMap={progressMap} />}
+        >
+            <div className="w-full max-w-4xl mx-auto flex flex-col justify-center items-center h-full p-4">
+                <div className="w-full glass-panel rounded-[2rem] shadow-xl p-8 md:p-12 text-center relative overflow-hidden transition-all duration-300 bg-white/90 border-t-8 border-orange-400 flex flex-col">
+                    <h2 className="text-xs font-bold text-slate-400 uppercase tracking-[0.3em] mb-8 md:mb-12">Điền Từ Vào Chỗ Trống</h2>
+
+                    <div className="text-2xl md:text-4xl font-medium text-slate-800 leading-loose flex flex-wrap justify-center gap-x-3 gap-y-4 items-baseline mb-12">
+                        {words.map((w, i) => {
+                            if (i === hiddenIndex && status !== 'CORRECT') {
+                                return (
+                                    <span key={i} className="relative inline-block mx-1">
+                                        <input
+                                            value={input}
+                                            onChange={e => setInput(e.target.value)}
+                                            onKeyDown={e => e.key === 'Enter' && check()}
+                                            className="border-b-4 border-orange-400 outline-none text-center text-orange-600 font-bold w-32 md:w-40 bg-orange-50 focus:bg-white focus:border-orange-500 transition-all placeholder-orange-200 rounded-t-lg px-2 shadow-inner"
+                                            autoFocus
+                                            placeholder="..."
+                                        />
+                                        <div className="absolute -bottom-6 left-0 w-full text-center text-[10px] text-orange-400 font-bold uppercase tracking-wider">Type here</div>
+                                    </span>
+                                )
+                            }
+                            return <span key={i} className={`transition-all duration-500 ${i === hiddenIndex ? "text-green-600 font-bold scale-110 drop-shadow-sm" : "opacity-90"}`}>{w}</span>
+                        })}
+                    </div>
+
+                    <div className="flex justify-center mt-auto">
+                        {status !== 'CORRECT' ? (
+                            <button onClick={check} className="px-10 py-4 bg-slate-900 text-white rounded-xl font-bold shadow-xl shadow-slate-300 hover:bg-black hover:scale-105 hover:shadow-2xl transition-all text-lg flex items-center gap-2">
+                                <span>Kiểm tra</span>
+                                <span className="text-xs bg-white/20 px-2 py-0.5 rounded text-white/80">Enter</span>
+                            </button>
+                        ) : (
+                            <button onClick={() => idx < sentences.length - 1 ? setIdx(idx + 1) : alert("Hoàn thành!")} className="px-10 py-4 bg-green-500 text-white rounded-xl font-bold shadow-xl shadow-green-200 hover:bg-green-600 hover:scale-105 transition-all text-lg animate-bounce-in">
+                                Câu tiếp theo ➜
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </GameLayout>
+    );
+};
+
+// =======================
+// 2C. REORDER ENGINE (SYMMETRICAL)
+// =======================
+const ReorderGameEngine = ({ lessonId, onBack }) => {
+    const [level, setLevel] = useState(1);
+    const [loading, setLoading] = useState(true);
+    const [sentences, setSentences] = useState([]);
+    const [currentIdx, setCurrentIdx] = useState(0);
+
+    const [gameData, setGameData] = useState({ pool: [], chosen: [], status: 'PENDING', correctAnswer: null });
+    const [isReady, setIsReady] = useState(false);
+    const [statusMap, setStatusMap] = useState({});
+    const [timeLeft, setTimeLeft] = useState(60);
+    const [audioCount, setAudioCount] = useState(0);
+    const timerRef = useRef(null);
+
+    const saveProgress = useCallback((forceStatus) => {
+        if (!sentences[currentIdx]) return;
+        const payload = {
+            lessonId, sentenceId: sentences[currentIdx].id, selectedLevel: level,
+            status: forceStatus || gameData.status, currentArrangement: gameData.chosen, timeRemaining: timeLeft, audioCount
+        };
+        fetch(`${API_URL}/study/save-progress`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        });
+        setStatusMap(prev => ({ ...prev, [currentIdx]: forceStatus || gameData.status }));
+    }, [lessonId, level, sentences, currentIdx, gameData, timeLeft, audioCount]);
+
+    useEffect(() => {
+        setLoading(true);
+        fetch(`${API_URL}/study/init/${lessonId}?level=${level}`)
+            .then(res => res.json()).then(data => { setSentences(data.sentences); setCurrentIdx(0); setLoading(false); setStatusMap({}); })
+            .catch(err => setLoading(false));
+    }, [lessonId, level]);
+
+    useEffect(() => {
+        if (!sentences[currentIdx]) return;
+        setGameData({ pool: [...sentences[currentIdx].shuffled_words], chosen: [], status: 'PENDING', correctAnswer: null });
+        setTimeLeft(sentences[currentIdx].time_limit); setAudioCount(0); setIsReady(false);
+    }, [currentIdx, sentences]);
+
+    useEffect(() => {
+        if (timerRef.current) clearInterval(timerRef.current);
+        if (isReady && gameData.status === 'PENDING' && timeLeft > 0) {
+            timerRef.current = setInterval(() => {
+                setTimeLeft(p => { if (p <= 1) { handleTimeout(); return 0; } return p - 1; });
+            }, 1000);
+        }
+        return () => clearInterval(timerRef.current);
+    }, [gameData.status, currentIdx, isReady]);
+
+    const handleTimeout = () => { setGameData(p => ({ ...p, status: 'TIMEOUT' })); saveProgress('TIMEOUT'); };
+
+    const handleWordClick = (word, index, fromPool) => {
+        if (gameData.status !== 'PENDING') return;
+        if (fromPool && !(level === 4 && audioCount >= 1)) { speak(word); if (level === 4) setAudioCount(c => c + 1); }
+        const newPool = [...gameData.pool]; const newChosen = [...gameData.chosen];
+        if (fromPool) { newPool.splice(index, 1); newChosen.push(word); } else { newChosen.splice(index, 1); newPool.push(word); }
+        setGameData(p => ({ ...p, pool: newPool, chosen: newChosen }));
+    };
+
+    const handleSubmit = async () => {
+        if (gameData.status !== 'PENDING') {
+            if (currentIdx < sentences.length - 1) setCurrentIdx(i => i + 1); else alert("Hoàn thành bài học!");
+            return;
+        }
+
+        const res = await fetch(`${API_URL}/study/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sentenceId: sentences[currentIdx].id, finalArrangement: gameData.chosen, level }) });
+        const result = await res.json();
+        const status = result.isCorrect ? 'CORRECT' : 'WRONG';
+        speak(result.isCorrect ? "Correct!" : "Wrong!");
+        setGameData(p => ({ ...p, status, correctAnswer: result.correctAnswer }));
+        saveProgress(status);
+    };
+
+    if (loading) return <div className="h-screen flex items-center justify-center text-slate-400">Loading...</div>;
+    if (!sentences[currentIdx]) return <div>Empty</div>;
+
+    return (
+        <GameLayout onBack={onBack}
+            navigator={<QuestionNavigator total={sentences.length} current={currentIdx} onChange={setCurrentIdx} statusMap={statusMap} />}
+        >
+            {/* Ready Overlay */}
+            {!isReady && <ReadyScreen sentenceIndex={currentIdx} onReady={() => setIsReady(true)} level={level} onLevelChange={setLevel} />}
+
+            {/* Toolbar - Floating better */}
+            <div className="flex justify-center mb-4 z-20">
+                <div className="bg-white/80 backdrop-blur-md rounded-full shadow-lg border border-white/50 p-1.5 flex items-center gap-4 px-4 pl-2">
+                    <div className="flex bg-slate-100 rounded-full p-1">
+                        {[1, 2, 3, 4].map(l => (
+                            <button key={l} onClick={() => setLevel(l)}
+                                className={`w-8 h-8 rounded-full font-bold text-xs transition-all ${level === l ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200'}`}>
+                                {l}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="w-px h-6 bg-slate-200"></div>
+                    <div className={`font-mono font-bold text-lg w-14 text-center ${timeLeft < 10 ? 'text-red-500 animate-pulse' : 'text-slate-700'}`}>
+                        {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
+                    </div>
+                </div>
+            </div>
+
+            {/* Workspace */}
+            <div className={`flex-1 flex flex-col items-center justify-between w-full max-w-4xl mx-auto transition-all duration-500 pb-2 ${!isReady ? 'blur-sm opacity-30 scale-95 pointer-events-none' : 'scale-100'}`}>
+
+                {/* Drop Zone - More tactile */}
+                <div className={`w-full min-h-[160px] p-6 md:p-8 rounded-[2rem] border-2 border-dashed transition-all duration-300 flex flex-wrap gap-3 content-start items-start justify-center shadow-inner
+                 ${gameData.status === 'CORRECT' ? 'bg-green-50 border-green-300' : gameData.status === 'WRONG' ? 'bg-red-50 border-red-300' : 'bg-white/60 border-indigo-200/60 hover:border-indigo-300 hover:bg-white/80'}
+             `}>
+                    {gameData.chosen.length === 0 && gameData.status === 'PENDING' && (
+                        <div className="text-slate-300 font-bold text-xl flex flex-col items-center justify-center h-24">
+                            <span className="text-4xl mb-2 opacity-50">⤵</span>
+                            <span>Sắp xếp từ vào đây</span>
+                        </div>
+                    )}
+                    {gameData.chosen.map((w, i) => (
+                        <button key={i} onClick={() => handleWordClick(w, i, false)} disabled={gameData.status !== 'PENDING' || !isReady}
+                            className="px-4 py-2 md:px-6 md:py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-300/50 hover:scale-105 active:scale-95 transition-all text-base md:text-lg animate-fade-in">
+                            {w}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Pool - Bottom aligned for easier reach */}
+                {gameData.status === 'PENDING' && (
+                    <div className="w-full flex flex-wrap gap-2 md:gap-3 justify-center content-center py-6 min-h-[120px]">
+                        {gameData.pool.map((w, i) => (
+                            <button key={i} onClick={() => handleWordClick(w, i, true)} disabled={!isReady}
+                                className="px-4 py-2 md:px-5 md:py-3 bg-white border border-slate-200 text-slate-600 rounded-xl font-medium shadow-sm hover:border-indigo-400 hover:text-indigo-600 hover:shadow-md hover:-translate-y-1 active:scale-95 transition-all text-base md:text-lg">
+                                {w}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                {/* Footer Actions */}
+                <div className="flex gap-4 w-full justify-center mt-auto">
+                    <button onClick={handleSubmit} disabled={!isReady}
+                        className={`w-full max-w-xs py-4 rounded-2xl font-bold text-white shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]
+                         ${!isReady ? 'bg-slate-300 cursor-not-allowed' : gameData.status === 'PENDING' ? 'bg-slate-900 shadow-slate-300' : gameData.status === 'CORRECT' ? 'bg-green-500 shadow-green-200' : 'bg-orange-500 shadow-orange-200'}
+                     `}>
+                        {gameData.status === 'PENDING' ? 'Kiểm tra' : 'Tiếp theo ➜'}
+                    </button>
+                </div>
+
+                {/* Result Feedback Floating */}
+                {gameData.correctAnswer && (
+                    <div className="absolute inset-x-0 bottom-24 flex justify-center pointer-events-none">
+                        <div className="bg-white/95 backdrop-blur-xl px-8 py-6 rounded-3xl shadow-2xl border border-slate-200 flex flex-col items-center animate-slide-up pointer-events-auto max-w-lg mx-4 text-center">
+                            <p className="text-xs font-bold text-slate-400 uppercase mb-2">Đáp án đúng là:</p>
+                            <p className="text-lg md:text-xl font-bold text-slate-800 leading-snug">{gameData.correctAnswer}</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </GameLayout>
+    );
+};
+
+/* =======================
+   2D. READ MODE (Simple Centered)
+   ======================= */
+const ReadMode = ({ sentences, onBack }) => (
+    <div className="flex flex-col h-screen bg-white font-sans text-slate-800">
+        <div className="px-8 py-5 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white/95 backdrop-blur-sm z-20">
+            <button onClick={onBack} className="text-slate-500 hover:text-indigo-600 font-bold flex items-center gap-2 transition px-4 py-2 hover:bg-slate-50 rounded-xl">← Quay lại</button>
+            <h2 className="text-xl font-bold text-slate-800">Chi tiết bài học</h2>
+            <div className="w-24"></div>
+        </div>
+        <div className="flex-1 overflow-y-auto w-full bg-slate-50/50">
+            <div className="max-w-4xl mx-auto p-8 md:p-12 space-y-4">
+                {sentences.map((s, i) => (
+                    <div key={s.id} onClick={() => speak(s.content)}
+                        className="group bg-white p-6 md:p-8 rounded-2xl border border-slate-100 hover:border-indigo-200 hover:shadow-xl hover:shadow-indigo-50 transition-all cursor-pointer flex gap-5 items-start relative overflow-hidden">
+                        <span className="text-sm font-bold text-slate-300 mt-1.5 min-w-6 group-hover:text-indigo-400 transition-colors">{String(i + 1).padStart(2, '0')}</span>
+                        <p className="text-xl leading-relaxed text-slate-700 group-hover:text-slate-900 transition-colors font-medium">{s.content}</p>
+                        <button className="ml-auto w-10 h-10 rounded-full bg-slate-50 text-slate-400 group-hover:bg-indigo-600 group-hover:text-white flex items-center justify-center transition-all opacity-0 group-hover:opacity-100">🔊</button>
+                    </div>
+                ))}
+            </div>
+        </div>
+    </div>
+);
+
+// =======================
+// 3. MAIN APP
+// =======================
+// Sử dụng biến môi trường VITE_API_URL nếu có, nếu không thì dùng localhost
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
+
+export default function RealDataApp() {
+    const [view, setView] = useState('DASHBOARD');
+    const [lessons, setLessons] = useState([]);
+    const [selectedLesson, setSelectedLesson] = useState(null);
+    const [lessonData, setLessonData] = useState([]);
+    const [newTitle, setNewTitle] = useState("");
+    const [newText, setNewText] = useState("");
+
+    useEffect(() => { fetch(`${API_URL}/lessons`).then(r => r.json()).then(setLessons).catch(console.error); }, [view]);
+
+    const selectLesson = (l) => { setSelectedLesson(l); fetch(`${API_URL}/lessons/${l.id}`).then(r => r.json()).then(d => { setLessonData(d); setView('DETAIL'); }); };
+    const handleCreate = async () => { if (!newTitle || !newText) return alert("Nhập đủ!"); await fetch(`${API_URL}/lessons`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTitle, text: newText }) }); setView('DASHBOARD'); setNewTitle(""); setNewText(""); };
+
+    return (
+        <div className="min-h-screen bg-slate-50 font-sans text-slate-800 selection:bg-indigo-100 selection:text-indigo-700 relative overflow-hidden">
+            {/* Global Animated Background for Dashboard/Create Views */}
+            <div className="absolute inset-0 bg-linear-to-br from-indigo-50/40 via-white to-purple-50/40 -z-20"></div>
+            <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10">
+                <div className="absolute top-[10%] right-[10%] w-[60vh] h-[60vh] bg-indigo-300/10 rounded-full blur-[100px] animate-float"></div>
+                <div className="absolute bottom-[10%] left-[10%] w-[50vh] h-[50vh] bg-purple-300/10 rounded-full blur-[100px] animate-float" style={{ animationDelay: '4s' }}></div>
+            </div>
+
+            {view === 'DASHBOARD' && (
+                <div className="w-full max-w-7xl mx-auto p-4 md:p-8 relative z-10 animate-fade-in flex flex-col h-screen">
+                    <header className="flex flex-col md:flex-row justify-between items-center mb-8 md:mb-12 gap-4 shrink-0">
+                        <div className="text-center md:text-left">
+                            <h1 className="text-4xl md:text-6xl font-black text-slate-900 tracking-tighter mb-2 gradient-text filter drop-shadow-sm">Learning Station</h1>
+                            <p className="text-slate-500 text-base md:text-lg font-medium opacity-80">Nền tảng học tập thông minh & hiện đại</p>
+                        </div>
+                        <button onClick={() => setView('CREATE')} className="bg-slate-900 text-white px-6 py-3 md:px-8 md:py-4 rounded-2xl font-bold shadow-xl shadow-slate-300 hover:scale-105 active:scale-95 transition-all text-sm md:text-lg flex items-center gap-2 group hover:bg-black">
+                            <span className="bg-white/20 rounded-full w-6 h-6 flex items-center justify-center text-xs">+</span>
+                            <span className="group-hover:translate-x-1 transition-transform">Bài học mới</span>
+                        </button>
+                    </header>
+
+                    <div className="flex-1 overflow-y-auto pb-8 custom-scrollbar">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 px-2">
+                            {lessons.map(l => (
+                                <div key={l.id} onClick={() => selectLesson(l)} className="glass-panel p-6 md:p-8 rounded-[2rem] shadow-sm hover:shadow-[0_20px_60px_rgba(99,102,241,0.25)] hover:-translate-y-2 hover:border-indigo-300 transition-all duration-500 cursor-pointer relative overflow-hidden group bg-white/40">
+                                    <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-indigo-500/10 to-transparent rounded-full blur-2xl group-hover:bg-indigo-500/20 transition-colors duration-500"></div>
+                                    <div className="absolute bottom-0 left-0 w-32 h-32 bg-gradient-to-tr from-purple-500/10 to-transparent rounded-full blur-2xl group-hover:bg-purple-500/20 transition-colors duration-500"></div>
+
+                                    <div className="relative z-10 flex flex-col h-full">
+                                        <div className="w-14 h-14 rounded-2xl bg-white border border-white/80 flex items-center justify-center text-2xl mb-6 shadow-sm group-hover:scale-110 group-hover:rotate-3 group-hover:shadow-md transition-all">
+                                            📚
+                                        </div>
+                                        <h3 className="font-bold text-xl md:text-2xl text-slate-800 mb-2 line-clamp-2 leading-tight group-hover:text-indigo-700 transition-colors">{l.title}</h3>
+                                        <div className="mt-auto pt-6 flex items-center gap-2 text-slate-400 text-xs md:text-sm font-bold group-hover:text-indigo-600 transition-colors uppercase tracking-wider">
+                                            <span>Bắt đầu ngay</span>
+                                            <span className="group-hover:translate-x-2 transition-transform">➜</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {view === 'CREATE' && (
+                <div className="max-w-3xl mx-auto p-12 relative z-10 animate-slide-up">
+                    <h2 className="text-3xl font-bold mb-8 text-slate-900">Soạn bài mới</h2>
+                    <div className="space-y-6">
+                        <input className="w-full p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-medium" placeholder="Tiêu đề..." value={newTitle} onChange={e => setNewTitle(e.target.value)} />
+                        <textarea className="w-full h-80 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-mono text-sm leading-relaxed" placeholder="Nội dung..." value={newText} onChange={e => setNewText(e.target.value)} />
+                        <div className="flex gap-4 pt-4"><button onClick={() => setView('DASHBOARD')} className="flex-1 py-4 rounded-2xl font-bold text-slate-500 hover:bg-slate-100">Hủy</button><button onClick={handleCreate} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl hover:bg-indigo-700">Lưu</button></div>
+                    </div>
+                </div>
+            )}
+
+            {view === 'DETAIL' && selectedLesson && (
+                <div className="h-screen flex flex-col items-center justify-center p-6 relative z-10 animate-fade-in">
+                    <button onClick={() => setView('DASHBOARD')} className="absolute top-8 left-8 text-slate-400 hover:text-slate-700 font-bold transition flex items-center gap-2">← Quay lại</button>
+                    <div className="text-center mb-16 max-w-2xl">
+                        <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-4 tracking-tight leading-tight">{selectedLesson.title}</h2>
+                        <p className="text-lg text-slate-500 font-medium bg-white px-6 py-2 rounded-full shadow-sm inline-block">{lessonData.length} sentences</p>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-5xl">
+                        <div onClick={() => setView('MODE_READ')} className="glass-panel p-8 rounded-[2.5rem] shadow-sm hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer flex items-center gap-6 group relative overflow-hidden">
+                            <div className="w-20 h-20 rounded-3xl bg-cyan-100 text-cyan-600 flex items-center justify-center text-4xl shadow-inner group-hover:rotate-6 transition-transform">📖</div>
+                            <div><h3 className="text-2xl font-bold text-slate-800 group-hover:text-cyan-600 transition-colors">Đọc & Nghe</h3><p className="text-slate-500 font-medium">Luyện tập thụ động</p></div>
+                        </div>
+                        <div onClick={() => setView('MODE_LISTEN')} className="glass-panel p-8 rounded-[2.5rem] shadow-sm hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer flex items-center gap-6 group relative overflow-hidden">
+                            <div className="w-20 h-20 rounded-3xl bg-blue-100 text-blue-600 flex items-center justify-center text-4xl shadow-inner group-hover:-rotate-6 transition-transform">🎧</div>
+                            <div><h3 className="text-2xl font-bold text-slate-800 group-hover:text-blue-600 transition-colors">Luyện Nghe</h3><p className="text-slate-500 font-medium">Thử thách thính giác</p></div>
+                        </div>
+                        <div onClick={() => setView('MODE_FILL')} className="glass-panel p-8 rounded-[2.5rem] shadow-sm hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer flex items-center gap-6 group relative overflow-hidden">
+                            <div className="w-20 h-20 rounded-3xl bg-orange-100 text-orange-600 flex items-center justify-center text-4xl shadow-inner group-hover:rotate-6 transition-transform">📝</div>
+                            <div><h3 className="text-2xl font-bold text-slate-800 group-hover:text-orange-600 transition-colors">Điền Từ</h3><p className="text-slate-500 font-medium">Kiểm tra trí nhớ</p></div>
+                        </div>
+                        <div onClick={() => setView('MODE_REORDER')} className="bg-slate-900 p-8 rounded-[2.5rem] shadow-2xl hover:shadow-indigo-500/50 hover:scale-[1.02] transition-all cursor-pointer flex items-center gap-6 text-white group relative overflow-hidden border border-slate-700">
+                            <div className="absolute inset-0 bg-linear-to-r from-indigo-600 to-purple-600 opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-0"></div>
+                            <div className="relative z-10 flex items-center gap-6 w-full">
+                                <div className="w-20 h-20 rounded-3xl bg-slate-800/50 text-indigo-400 flex items-center justify-center text-4xl backdrop-blur-sm group-hover:bg-white/20 group-hover:text-white transition-all">🧩</div>
+                                <div><h3 className="text-2xl font-bold">Xếp Từ Game</h3><p className="text-slate-400 group-hover:text-indigo-100">Tốc độ & Phản xạ</p></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {view === 'MODE_READ' && <ReadMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
+            {view === 'MODE_LISTEN' && <ListenMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
+            {view === 'MODE_FILL' && <FillMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
+            {view === 'MODE_REORDER' && <ReorderGameEngine lessonId={selectedLesson.id} onBack={() => setView('DETAIL')} />}
+        </div>
+    );
+}
