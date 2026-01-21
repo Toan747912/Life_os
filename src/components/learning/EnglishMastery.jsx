@@ -74,6 +74,7 @@ const speakText = (text, rate = 1) => {
 const GameReorder = ({ data, onFinish }) => {
     const [shuffled, setShuffled] = useState([]);
     const [selected, setSelected] = useState([]);
+    const [processing, setProcessing] = useState(false);
 
     useEffect(() => {
         // Shuffle words ban đầu
@@ -96,11 +97,15 @@ const GameReorder = ({ data, onFinish }) => {
     };
 
     const checkAnswer = () => {
-        const sentence = selected.join(" ");
-        // Xử lý dấu câu dính liền (vd: "live ?" -> "live?")
-        const normalized = sentence.replace(/\s([?.!,])/g, '$1');
-        const isCorrect = normalized === data.answer || sentence === data.answer;
-        onFinish(isCorrect, data.answer);
+        setProcessing(true);
+        setTimeout(() => {
+            const sentence = selected.join(" ");
+            // Xử lý dấu câu dính liền (vd: "live ?" -> "live?")
+            const normalized = sentence.replace(/\s([?.!,])/g, '$1');
+            const isCorrect = normalized === data.answer || sentence === data.answer;
+            onFinish(isCorrect, data.answer);
+            setProcessing(false);
+        }, 600);
     };
 
     return (
@@ -122,7 +127,13 @@ const GameReorder = ({ data, onFinish }) => {
                 ))}
             </div>
 
-            <button onClick={checkAnswer} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold">Kiểm tra</button>
+            <button
+                onClick={checkAnswer}
+                disabled={processing}
+                className={`w-full text-white py-3 rounded-lg font-bold transition ${processing ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+            >
+                {processing ? 'Đang xử lý...' : 'Kiểm tra'}
+            </button>
         </div>
     );
 };
@@ -162,10 +173,15 @@ const GameErrorHunt = ({ data, onFinish }) => {
 // GAME: DICTATION (NGHE CHÉP)
 const GameDictation = ({ data, onFinish }) => {
     const [input, setInput] = useState("");
+    const [processing, setProcessing] = useState(false);
 
     const check = () => {
-        const isCorrect = input.trim().toLowerCase().replace(/[.,!?]/g, "") === data.text.trim().toLowerCase().replace(/[.,!?]/g, "");
-        onFinish(isCorrect, data.text);
+        setProcessing(true);
+        setTimeout(() => {
+            const isCorrect = input.trim().toLowerCase().replace(/[.,!?]/g, "") === data.text.trim().toLowerCase().replace(/[.,!?]/g, "");
+            onFinish(isCorrect, data.text);
+            setProcessing(false);
+        }, 600);
     };
 
     return (
@@ -185,7 +201,13 @@ const GameDictation = ({ data, onFinish }) => {
                 placeholder="Gõ lại những gì bạn nghe..."
             />
 
-            <button onClick={check} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold">Nộp bài</button>
+            <button
+                onClick={check}
+                disabled={processing}
+                className={`w-full text-white py-3 rounded-lg font-bold transition ${processing ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+            >
+                {processing ? 'Đang xử lý...' : 'Nộp bài'}
+            </button>
         </div>
     );
 };
@@ -193,11 +215,16 @@ const GameDictation = ({ data, onFinish }) => {
 // GAME: CLOZE (ĐIỀN TỪ)
 const GameCloze = ({ data, onFinish }) => {
     const [val, setVal] = useState("");
+    const [processing, setProcessing] = useState(false);
 
     const parts = data.text.split("___");
 
     const check = () => {
-        onFinish(val.toLowerCase().trim() === data.answer.toLowerCase(), data.answer);
+        setProcessing(true);
+        setTimeout(() => {
+            onFinish(val.toLowerCase().trim() === data.answer.toLowerCase(), data.answer);
+            setProcessing(false);
+        }, 600);
     };
 
     return (
@@ -213,7 +240,13 @@ const GameCloze = ({ data, onFinish }) => {
                 {parts[1]}
             </div>
             <p className="text-center text-xs text-gray-400 italic">Gợi ý: {data.hint}</p>
-            <button onClick={check} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold">Kiểm tra</button>
+            <button
+                onClick={check}
+                disabled={processing}
+                className={`w-full text-white py-3 rounded-lg font-bold transition ${processing ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+            >
+                {processing ? 'Đang xử lý...' : 'Kiểm tra'}
+            </button>
         </div>
     );
 };

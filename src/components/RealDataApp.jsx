@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ClozeParagraphMode, ParagraphReorderMode, ErrorHuntMode } from './learning/AdvancedReviewModes';
 
 // =======================
 // 1. SHARED & UTILS
@@ -195,6 +196,7 @@ const FillMode = ({ sentences, onBack }) => {
     const [input, setInput] = useState("");
     const [status, setStatus] = useState("PENDING");
     const [progressMap, setProgressMap] = useState({});
+    const [processing, setProcessing] = useState(false);
 
     useEffect(() => {
         if (sentences[idx]) {
@@ -209,14 +211,18 @@ const FillMode = ({ sentences, onBack }) => {
     }, [idx, sentences]);
 
     const check = () => {
-        const correctWord = words[hiddenIndex].replace(/[.,!?;:]/g, "");
-        if (input.trim().toLowerCase() === correctWord.toLowerCase()) {
-            speak("Correct"); setStatus("CORRECT");
-            setProgressMap(prev => ({ ...prev, [idx]: 'CORRECT' }));
-        } else {
-            speak("Try again"); setStatus("WRONG");
-            setProgressMap(prev => ({ ...prev, [idx]: 'WRONG' }));
-        }
+        setProcessing(true);
+        setTimeout(() => {
+            const correctWord = words[hiddenIndex].replace(/[.,!?;:]/g, "");
+            if (input.trim().toLowerCase() === correctWord.toLowerCase()) {
+                speak("Correct"); setStatus("CORRECT");
+                setProgressMap(prev => ({ ...prev, [idx]: 'CORRECT' }));
+            } else {
+                speak("Try again"); setStatus("WRONG");
+                setProgressMap(prev => ({ ...prev, [idx]: 'WRONG' }));
+            }
+            setProcessing(false);
+        }, 600);
     };
 
     return (
@@ -250,9 +256,9 @@ const FillMode = ({ sentences, onBack }) => {
 
                     <div className="flex justify-center mt-auto">
                         {status !== 'CORRECT' ? (
-                            <button onClick={check} className="px-10 py-4 bg-slate-900 text-white rounded-xl font-bold shadow-xl shadow-slate-300 hover:bg-black hover:scale-105 hover:shadow-2xl transition-all text-lg flex items-center gap-2">
-                                <span>Kiểm tra</span>
-                                <span className="text-xs bg-white/20 px-2 py-0.5 rounded text-white/80">Enter</span>
+                            <button onClick={check} disabled={processing} className={`px-10 py-4 text-white rounded-xl font-bold shadow-xl transition-all text-lg flex items-center gap-2 ${processing ? 'bg-slate-400 cursor-not-allowed' : 'bg-slate-900 shadow-slate-300 hover:bg-black hover:scale-105 hover:shadow-2xl'}`}>
+                                <span>{processing ? 'Đang xử lý...' : 'Kiểm tra'}</span>
+                                {!processing && <span className="text-xs bg-white/20 px-2 py-0.5 rounded text-white/80">Enter</span>}
                             </button>
                         ) : (
                             <button onClick={() => idx < sentences.length - 1 ? setIdx(idx + 1) : alert("Hoàn thành!")} className="px-10 py-4 bg-green-500 text-white rounded-xl font-bold shadow-xl shadow-green-200 hover:bg-green-600 hover:scale-105 transition-all text-lg animate-bounce-in">
@@ -269,11 +275,12 @@ const FillMode = ({ sentences, onBack }) => {
 // =======================
 // 2C. REORDER ENGINE (SYMMETRICAL)
 // =======================
-const ReorderGameEngine = ({ lessonId, onBack }) => {
+const ReorderGameEngine = ({ lessonId, onBack, isReview = false }) => {
     const [level, setLevel] = useState(1);
     const [loading, setLoading] = useState(true);
     const [sentences, setSentences] = useState([]);
     const [currentIdx, setCurrentIdx] = useState(0);
+    const [processing, setProcessing] = useState(false);
 
     const [gameData, setGameData] = useState({ pool: [], chosen: [], status: 'PENDING', correctAnswer: null });
     const [isReady, setIsReady] = useState(false);
@@ -296,10 +303,14 @@ const ReorderGameEngine = ({ lessonId, onBack }) => {
 
     useEffect(() => {
         setLoading(true);
-        fetch(`${API_URL}/study/init/${lessonId}?level=${level}`)
+        const endpoint = isReview
+            ? `${API_URL}/study/review/${lessonId}?level=${level}`
+            : `${API_URL}/study/init/${lessonId}?level=${level}`;
+
+        fetch(endpoint)
             .then(res => res.json()).then(data => { setSentences(data.sentences); setCurrentIdx(0); setLoading(false); setStatusMap({}); })
             .catch(err => setLoading(false));
-    }, [lessonId, level]);
+    }, [lessonId, level, isReview]);
 
     useEffect(() => {
         if (!sentences[currentIdx]) return;
@@ -333,15 +344,28 @@ const ReorderGameEngine = ({ lessonId, onBack }) => {
             return;
         }
 
-        const res = await fetch(`${API_URL}/study/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sentenceId: sentences[currentIdx].id, finalArrangement: gameData.chosen, level }) });
-        const result = await res.json();
-        const status = result.isCorrect ? 'CORRECT' : 'WRONG';
-        speak(result.isCorrect ? "Correct!" : "Wrong!");
-        setGameData(p => ({ ...p, status, correctAnswer: result.correctAnswer }));
-        saveProgress(status);
+        setProcessing(true);
+        try {
+            // Artificial delay for UX
+            await new Promise(r => setTimeout(r, 600));
+            const res = await fetch(`${API_URL}/study/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sentenceId: sentences[currentIdx].id, finalArrangement: gameData.chosen, level }) });
+            const result = await res.json();
+            const status = result.isCorrect ? 'CORRECT' : 'WRONG';
+            speak(result.isCorrect ? "Correct!" : "Wrong!");
+            setGameData(p => ({ ...p, status, correctAnswer: result.correctAnswer }));
+            saveProgress(status);
+        } finally {
+            setProcessing(false);
+        }
     };
 
     if (loading) return <div className="h-screen flex items-center justify-center text-slate-400">Loading...</div>;
+    if (sentences.length === 0) return (
+        <div className="h-screen flex flex-col items-center justify-center text-slate-500 gap-4">
+            <p className="text-xl font-bold">{isReview ? 'Bạn chưa có câu nào sai để ôn tập! 🎉' : 'Bài học chưa có dữ liệu.'}</p>
+            <button onClick={onBack} className="px-6 py-2 bg-indigo-600 text-white rounded-lg">Quay lại</button>
+        </div>
+    );
     if (!sentences[currentIdx]) return <div>Empty</div>;
 
     return (
@@ -404,11 +428,11 @@ const ReorderGameEngine = ({ lessonId, onBack }) => {
 
                 {/* Footer Actions */}
                 <div className="flex gap-4 w-full justify-center mt-auto">
-                    <button onClick={handleSubmit} disabled={!isReady}
+                    <button onClick={handleSubmit} disabled={!isReady || processing}
                         className={`w-full max-w-xs py-4 rounded-2xl font-bold text-white shadow-xl transition-all hover:scale-[1.02] active:scale-[0.98]
-                         ${!isReady ? 'bg-slate-300 cursor-not-allowed' : gameData.status === 'PENDING' ? 'bg-slate-900 shadow-slate-300' : gameData.status === 'CORRECT' ? 'bg-green-500 shadow-green-200' : 'bg-orange-500 shadow-orange-200'}
+                         ${!isReady || processing ? 'bg-slate-300 cursor-not-allowed' : gameData.status === 'PENDING' ? 'bg-slate-900 shadow-slate-300' : gameData.status === 'CORRECT' ? 'bg-green-500 shadow-green-200' : 'bg-orange-500 shadow-orange-200'}
                      `}>
-                        {gameData.status === 'PENDING' ? 'Kiểm tra' : 'Tiếp theo ➜'}
+                        {processing ? 'Đang xử lý...' : (gameData.status === 'PENDING' ? 'Kiểm tra' : 'Tiếp theo ➜')}
                     </button>
                 </div>
 
@@ -470,6 +494,7 @@ export default function RealDataApp() {
     const [newText, setNewText] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [isFetching, setIsFetching] = useState(true);
+    const [isReviewMode, setIsReviewMode] = useState(false);
 
     const fetchLessons = useCallback(() => {
         setIsFetching(true);
@@ -680,13 +705,13 @@ export default function RealDataApp() {
             )}
 
             {view === 'DETAIL' && selectedLesson && (
-                <div className="h-screen flex flex-col items-center justify-center p-6 relative z-10 animate-fade-in">
+                <div className="h-screen overflow-y-auto flex flex-col p-6 relative z-10 animate-fade-in custom-scrollbar">
                     <button onClick={() => setView('DASHBOARD')} className="absolute top-8 left-8 text-slate-400 hover:text-slate-700 font-bold transition flex items-center gap-2">← Quay lại</button>
-                    <div className="text-center mb-16 max-w-2xl">
+                    <div className="text-center mb-16 max-w-2xl mx-auto mt-12">
                         <h2 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-4 tracking-tight leading-tight">{selectedLesson.title}</h2>
                         <p className="text-lg text-slate-500 font-medium bg-white px-6 py-2 rounded-full shadow-sm inline-block">{lessonData.length} sentences</p>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-5xl">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-5xl mx-auto pb-12">
                         <div onClick={() => setView('MODE_READ')} className="glass-panel p-8 rounded-[2.5rem] shadow-sm hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer flex items-center gap-6 group relative overflow-hidden">
                             <div className="w-20 h-20 rounded-3xl bg-cyan-100 text-cyan-600 flex items-center justify-center text-4xl shadow-inner group-hover:rotate-6 transition-transform">📖</div>
                             <div><h3 className="text-2xl font-bold text-slate-800 group-hover:text-cyan-600 transition-colors">Đọc & Nghe</h3><p className="text-slate-500 font-medium">Luyện tập thụ động</p></div>
@@ -699,11 +724,59 @@ export default function RealDataApp() {
                             <div className="w-20 h-20 rounded-3xl bg-orange-100 text-orange-600 flex items-center justify-center text-4xl shadow-inner group-hover:rotate-6 transition-transform">📝</div>
                             <div><h3 className="text-2xl font-bold text-slate-800 group-hover:text-orange-600 transition-colors">Điền Từ</h3><p className="text-slate-500 font-medium">Kiểm tra trí nhớ</p></div>
                         </div>
-                        <div onClick={() => setView('MODE_REORDER')} className="bg-slate-900 p-8 rounded-[2.5rem] shadow-2xl hover:shadow-indigo-500/50 hover:scale-[1.02] transition-all cursor-pointer flex items-center gap-6 text-white group relative overflow-hidden border border-slate-700">
+                        <div onClick={() => { setView('MODE_REORDER'); setIsReviewMode(false); }} className="bg-slate-900 p-8 rounded-[2.5rem] shadow-2xl hover:shadow-indigo-500/50 hover:scale-[1.02] transition-all cursor-pointer flex items-center gap-6 text-white group relative overflow-hidden border border-slate-700">
                             <div className="absolute inset-0 bg-linear-to-r from-indigo-600 to-purple-600 opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-0"></div>
                             <div className="relative z-10 flex items-center gap-6 w-full">
                                 <div className="w-20 h-20 rounded-3xl bg-slate-800/50 text-indigo-400 flex items-center justify-center text-4xl backdrop-blur-sm group-hover:bg-white/20 group-hover:text-white transition-all">🧩</div>
                                 <div><h3 className="text-2xl font-bold">Xếp Từ Game</h3><p className="text-slate-400 group-hover:text-indigo-100">Tốc độ & Phản xạ</p></div>
+                            </div>
+                        </div>
+                        {/* Review Corner */}
+                        <div className="col-span-1 md:col-span-2 mt-4">
+                            <h3 className="text-xl font-bold text-slate-700 mb-4 flex items-center gap-2">
+                                <span className="bg-indigo-100 text-indigo-600 p-1.5 rounded-lg text-lg">🎯</span>
+                                Góc Ôn Tập
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div onClick={() => { setView('MODE_REORDER'); setIsReviewMode(true); }} className="bg-red-50 hover:bg-red-100 border border-red-100 p-5 rounded-3xl cursor-pointer flex items-center gap-4 transition-all hover:scale-[1.02] group">
+                                    <div className="w-12 h-12 rounded-2xl bg-red-100 text-red-500 flex items-center justify-center text-2xl group-hover:bg-white group-hover:shadow-sm transition-all">🩹</div>
+                                    <div>
+                                        <h4 className="font-bold text-slate-700">Ôn Lại Câu Sai</h4>
+                                        <p className="text-xs text-slate-500">Sửa lỗi đã mắc phải</p>
+                                    </div>
+                                </div>
+                                <div onClick={() => { setView('MODE_REORDER'); setIsReviewMode(false); }} className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 p-5 rounded-3xl cursor-pointer flex items-center gap-4 transition-all hover:scale-[1.02] group">
+                                    <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-2xl group-hover:bg-white group-hover:shadow-sm transition-all">🔄</div>
+                                    <div>
+                                        <h4 className="font-bold text-slate-700">Ôn Tập Tổng Hợp</h4>
+                                        <p className="text-xs text-slate-500">Chạy lại toàn bộ bài</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Advanced Modes Grid */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 pt-4 border-t border-slate-100">
+                                <div onClick={() => setView('MODE_CLOZE_PARA')} className="bg-amber-50 hover:bg-amber-100 border border-amber-100 p-5 rounded-3xl cursor-pointer flex flex-col items-center text-center gap-3 transition-all hover:scale-[1.02] group">
+                                    <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center text-2xl group-hover:bg-white group-hover:shadow-sm transition-all">🕳️</div>
+                                    <div>
+                                        <h4 className="font-bold text-slate-700">Đục Lỗ Đoạn Văn</h4>
+                                        <p className="text-[10px] text-slate-500">Điền từ còn thiếu</p>
+                                    </div>
+                                </div>
+                                <div onClick={() => setView('MODE_PARA_REORDER')} className="bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 p-5 rounded-3xl cursor-pointer flex flex-col items-center text-center gap-3 transition-all hover:scale-[1.02] group">
+                                    <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center text-2xl group-hover:bg-white group-hover:shadow-sm transition-all">📑</div>
+                                    <div>
+                                        <h4 className="font-bold text-slate-700">Xếp Lại Đoạn Văn</h4>
+                                        <p className="text-[10px] text-slate-500">Sắp xếp câu chuyện</p>
+                                    </div>
+                                </div>
+                                <div onClick={() => setView('MODE_ERROR_HUNT')} className="bg-rose-50 hover:bg-rose-100 border border-rose-100 p-5 rounded-3xl cursor-pointer flex flex-col items-center text-center gap-3 transition-all hover:scale-[1.02] group">
+                                    <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center text-2xl group-hover:bg-white group-hover:shadow-sm transition-all">🕵️</div>
+                                    <div>
+                                        <h4 className="font-bold text-slate-700">Tìm Lỗi Sai (Khó)</h4>
+                                        <p className="text-[10px] text-slate-500">Săn lỗi ngữ pháp</p>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -713,7 +786,12 @@ export default function RealDataApp() {
             {view === 'MODE_READ' && <ReadMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_LISTEN' && <ListenMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_FILL' && <FillMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
-            {view === 'MODE_REORDER' && <ReorderGameEngine lessonId={selectedLesson.id} onBack={() => setView('DETAIL')} />}
-        </div>
+            {view === 'MODE_REORDER' && <ReorderGameEngine lessonId={selectedLesson.id} onBack={() => setView('DETAIL')} isReview={isReviewMode} />}
+
+            {/* Advanced Modes */}
+            {view === 'MODE_CLOZE_PARA' && <ClozeParagraphMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
+            {view === 'MODE_PARA_REORDER' && <ParagraphReorderMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
+            {view === 'MODE_ERROR_HUNT' && <ErrorHuntMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
+        </div >
     );
 }

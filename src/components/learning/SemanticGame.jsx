@@ -170,7 +170,7 @@ export default function SemanticGame({ onBack, lessonId }) {
                             <p className="text-xs text-indigo-500">Tự động phân tích nội dung bài học và điền dữ liệu.</p>
                         </div>
                         <button onClick={handleForceAnalyze} disabled={loading} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-indigo-700 transition shadow-lg shadow-indigo-200 disabled:opacity-50">
-                            {loading ? 'Đang chạy...' : 'Chạy Ngay 🚀'}
+                            {loading ? 'Đang xử lý...' : 'Chạy Ngay 🚀'}
                         </button>
                     </div>
                 )}

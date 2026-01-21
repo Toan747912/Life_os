@@ -78,6 +78,7 @@ const OutlineBuilder = ({ onComplete }) => {
 
 export default function SmartStudyCoach() {
     const [step, setStep] = useState('SETUP'); // SETUP | LEARNING | RESULT
+    const [processing, setProcessing] = useState(false);
 
     // -- CONFIG STATE --
     const [config, setConfig] = useState(() => loadStorage('sc_config', {
@@ -302,10 +303,17 @@ export default function SmartStudyCoach() {
 
                         {/* Action: Xem đáp án */}
                         <button
-                            onClick={() => setStep('RESULT')}
-                            className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold mt-4 shadow hover:bg-indigo-700"
+                            onClick={() => {
+                                setProcessing(true);
+                                setTimeout(() => {
+                                    setStep('RESULT');
+                                    setProcessing(false);
+                                }, 800);
+                            }}
+                            disabled={processing}
+                            className={`w-full text-white py-3 rounded-lg font-bold mt-4 shadow transition ${processing ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
                         >
-                            Nộp bài & Check đáp án
+                            {processing ? 'Đang xử lý...' : 'Nộp bài & Check đáp án'}
                         </button>
                     </div>
                 )}

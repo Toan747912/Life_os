@@ -249,6 +249,46 @@ app.get('/api/study/init/:lessonId', async (req, res) => {
     }
 });
 
+// GET REVIEW SESSION (WRONG ANSWERS ONLY)
+app.get('/api/study/review/:lessonId', async (req, res) => {
+    try {
+        const { lessonId } = req.params;
+        const level = parseInt(req.query.level) || 1;
+
+        // 1. Get Sentences that are marked WRONG in user_progress
+        const query = `
+            SELECT s.* 
+            FROM sentences s
+            JOIN user_progress up ON s.id = up.sentence_id
+            WHERE s.lesson_id = $1 
+            AND up.status = 'WRONG'
+            ORDER BY s."order" ASC
+        `;
+        const result = await pool.query(query, [lessonId]);
+        const sentences = result.rows;
+
+        // 2. Process for Game (Reuse logic)
+        const gameData = sentences.map(s => {
+            const { shuffled_words, word_count } = processSentenceForLevel(s.content, level, sentences);
+            return {
+                id: s.id,
+                shuffled_words,
+                time_limit: calculateTimeLimit(word_count, level),
+                difficulty: s.difficulty
+            };
+        });
+
+        res.json({
+            level,
+            sentences: gameData
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json(err);
+    }
+});
+
 // SUBMIT ANSWER
 app.post('/api/study/submit', async (req, res) => {
     try {
