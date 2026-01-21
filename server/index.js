@@ -10,19 +10,18 @@ app.use(bodyParser.json());
 
 // CẤU HÌNH KẾT NỐI DATABASE
 const pool = new Pool(
-    // process.env.DATABASE_URL
-    //     ? {
-    //         connectionString: process.env.DATABASE_URL,
-    //         ssl: { rejectUnauthorized: false } // Bắt buộc cho Supabase/Render
-    //     }
-    //     : {
-    {
-        user: 'postgres',
-        host: 'localhost',
-        database: 'life_os',
-        password: 'ngoquoctoan1234',
-        port: 5432,
-    }
+    process.env.DATABASE_URL
+        ? {
+            connectionString: process.env.DATABASE_URL,
+            ssl: { rejectUnauthorized: false } // Bắt buộc cho Supabase/Render
+        }
+        : {
+            user: 'postgres',
+            host: 'localhost',
+            database: 'life_os',
+            password: 'ngoquoctoan1234',
+            port: 5432,
+        }
 );
 
 // --- HELPER FUNCTIONS ---
@@ -86,6 +85,7 @@ function calculateTimeLimit(wordCount, level) {
 app.get('/api/lessons', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM lessons ORDER BY id DESC');
+        console.log(`[GET /api/lessons] Found ${result.rows.length} lessons`);
         res.json(result.rows);
     } catch (err) {
         console.error(err);
@@ -140,7 +140,7 @@ app.post('/api/lessons', async (req, res) => {
         res.json({ success: true, lessonId });
     } catch (e) {
         await client.query('ROLLBACK');
-        console.error(e);
+        console.error("[POST /api/lessons] ERROR:", e);
         res.status(500).json(e);
     } finally {
         client.release();
