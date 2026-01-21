@@ -155,8 +155,8 @@ const ListenMode = ({ sentences, onBack }) => {
             navigator={<QuestionNavigator total={sentences.length} current={idx} onChange={setIdx} />}
         >
             <div className="w-full max-w-2xl mx-auto flex flex-col items-center justify-center h-full max-h-[70vh]">
-                <div className="w-full glass-panel rounded-[2rem] shadow-xl p-6 md:p-10 text-center relative flex flex-col items-center justify-between h-full bg-white/80">
-                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-indigo-500"></div>
+                <div className="w-full glass-panel rounded-4xl shadow-xl p-6 md:p-10 text-center relative flex flex-col items-center justify-between h-full bg-white/80">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-linear-to-r from-blue-400 to-indigo-500"></div>
 
                     <h2 className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-[0.2em] mb-4 shrink-0">Luyện Nghe Thụ Động</h2>
 
@@ -224,7 +224,7 @@ const FillMode = ({ sentences, onBack }) => {
             navigator={<QuestionNavigator total={sentences.length} current={idx} onChange={setIdx} statusMap={progressMap} />}
         >
             <div className="w-full max-w-4xl mx-auto flex flex-col justify-center items-center h-full p-4">
-                <div className="w-full glass-panel rounded-[2rem] shadow-xl p-8 md:p-12 text-center relative overflow-hidden transition-all duration-300 bg-white/90 border-t-8 border-orange-400 flex flex-col">
+                <div className="w-full glass-panel rounded-4xl shadow-xl p-8 md:p-12 text-center relative overflow-hidden transition-all duration-300 bg-white/90 border-t-8 border-orange-400 flex flex-col">
                     <h2 className="text-xs font-bold text-slate-400 uppercase tracking-[0.3em] mb-8 md:mb-12">Điền Từ Vào Chỗ Trống</h2>
 
                     <div className="text-2xl md:text-4xl font-medium text-slate-800 leading-loose flex flex-wrap justify-center gap-x-3 gap-y-4 items-baseline mb-12">
@@ -373,7 +373,7 @@ const ReorderGameEngine = ({ lessonId, onBack }) => {
             <div className={`flex-1 flex flex-col items-center justify-between w-full max-w-4xl mx-auto transition-all duration-500 pb-2 ${!isReady ? 'blur-sm opacity-30 scale-95 pointer-events-none' : 'scale-100'}`}>
 
                 {/* Drop Zone - More tactile */}
-                <div className={`w-full min-h-[160px] p-6 md:p-8 rounded-[2rem] border-2 border-dashed transition-all duration-300 flex flex-wrap gap-3 content-start items-start justify-center shadow-inner
+                <div className={`w-full min-h-[160px] p-6 md:p-8 rounded-4xl border-2 border-dashed transition-all duration-300 flex flex-wrap gap-3 content-start items-start justify-center shadow-inner
                  ${gameData.status === 'CORRECT' ? 'bg-green-50 border-green-300' : gameData.status === 'WRONG' ? 'bg-red-50 border-red-300' : 'bg-white/60 border-indigo-200/60 hover:border-indigo-300 hover:bg-white/80'}
              `}>
                     {gameData.chosen.length === 0 && gameData.status === 'PENDING' && (
@@ -462,16 +462,132 @@ export default function RealDataApp() {
     const [lessons, setLessons] = useState([]);
     const [selectedLesson, setSelectedLesson] = useState(null);
     const [lessonData, setLessonData] = useState([]);
+
+    // Create/Edit State
+    const [isEditing, setIsEditing] = useState(false);
+    const [currentLessonId, setCurrentLessonId] = useState(null);
     const [newTitle, setNewTitle] = useState("");
     const [newText, setNewText] = useState("");
+    const [isLoading, setIsLoading] = useState(false);
+    const [isFetching, setIsFetching] = useState(true);
 
-    useEffect(() => { fetch(`${API_URL}/lessons`).then(r => r.json()).then(setLessons).catch(console.error); }, [view]);
+    const fetchLessons = useCallback(() => {
+        setIsFetching(true);
+        fetch(`${API_URL}/lessons`)
+            .then(r => {
+                if (!r.ok) throw new Error("Server error");
+                return r.json();
+            })
+            .then(data => {
+                if (Array.isArray(data)) setLessons(data);
+                else console.error("Invalid data format:", data);
+            })
+            .catch(err => console.error("Fetch error:", err))
+            .finally(() => setIsFetching(false));
+    }, []);
+
+    useEffect(() => {
+        if (view === 'DASHBOARD') {
+            fetchLessons();
+        }
+    }, [view, fetchLessons]);
 
     const selectLesson = (l) => { setSelectedLesson(l); fetch(`${API_URL}/lessons/${l.id}`).then(r => r.json()).then(d => { setLessonData(d); setView('DETAIL'); }); };
-    const handleCreate = async () => { if (!newTitle || !newText) return alert("Nhập đủ!"); await fetch(`${API_URL}/lessons`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTitle, text: newText }) }); setView('DASHBOARD'); setNewTitle(""); setNewText(""); };
+
+    const handleCreateOrUpdate = async () => {
+        if (!newTitle || !newText) return alert("Nhập đủ!");
+        if (isLoading) return;
+
+        setIsLoading(true);
+        try {
+            const method = isEditing ? 'PUT' : 'POST';
+            const url = isEditing ? `${API_URL}/lessons/${currentLessonId}` : `${API_URL}/lessons`;
+
+            const res = await fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: newTitle, text: newText })
+            });
+
+            if (!res.ok) throw new Error("Failed to save");
+
+            setView('DASHBOARD');
+            setNewTitle("");
+            setNewText("");
+            setIsEditing(false);
+            setCurrentLessonId(null);
+        } catch (error) {
+            alert("Có lỗi xảy ra: " + error.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleDelete = async (e, id) => {
+        e.stopPropagation(); // Prevent card click
+        if (!window.confirm("Bạn có chắc chắn muốn xóa bài học này?")) return;
+        if (isLoading) return;
+
+        setIsLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/lessons/${id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error("Failed to delete");
+            fetchLessons(); // Refresh list
+        } catch (error) {
+            alert("Có lỗi xóa bài: " + error.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const startEdit = (e, lesson) => {
+        e.stopPropagation();
+        setNewTitle(lesson.title);
+        // Note: We don't have the full text here, assuming user wants to rewrite or we need to fetch it.
+        // For now, let's leave text empty or fetch it first.
+        // Better UX: Fetch sentences and join them, OR just let user know old content is replaced.
+        // Simple approach for now: Leave text empty but warn user, OR fetch data.
+        // Let's try to fetch data to fill it if possible, but our GET /lessons/:id returns sentences.
+        // We will just let user enter new text or keep it empty (if backend supports partial update, but our backend replaces).
+        // Let's set a placeholder or fetch.
+
+        setIsLoading(true);
+        fetch(`${API_URL}/lessons/${lesson.id}`)
+            .then(r => r.json())
+            .then(sentences => {
+                const reconstructedText = sentences.map(s => s.content).join("\n");
+                setNewText(reconstructedText);
+                setIsEditing(true);
+                setCurrentLessonId(lesson.id);
+                setView('CREATE');
+            })
+            .catch(err => {
+                console.error(err);
+                alert("Không thể tải nội dung bài học để sửa.");
+            })
+            .finally(() => setIsLoading(false));
+    };
+
+    const resetCreate = () => {
+        setView('DASHBOARD');
+        setIsEditing(false);
+        setCurrentLessonId(null);
+        setNewTitle("");
+        setNewText("");
+    };
 
     return (
         <div className="min-h-screen bg-slate-50 font-sans text-slate-800 selection:bg-indigo-100 selection:text-indigo-700 relative overflow-hidden">
+            {/* Global Loading Overlay */}
+            {isLoading && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/50 backdrop-blur-sm animate-fade-in">
+                    <div className="flex flex-col items-center">
+                        <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+                        <p className="text-indigo-600 font-bold text-lg animate-pulse">Đang xử lý...</p>
+                    </div>
+                </div>
+            )}
+
             {/* Global Animated Background for Dashboard/Create Views */}
             <div className="absolute inset-0 bg-linear-to-br from-indigo-50/40 via-white to-purple-50/40 -z-20"></div>
             <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10">
@@ -486,43 +602,79 @@ export default function RealDataApp() {
                             <h1 className="text-4xl md:text-6xl font-black text-slate-900 tracking-tighter mb-2 gradient-text filter drop-shadow-sm">Learning Station</h1>
                             <p className="text-slate-500 text-base md:text-lg font-medium opacity-80">Nền tảng học tập thông minh & hiện đại</p>
                         </div>
-                        <button onClick={() => setView('CREATE')} className="bg-slate-900 text-white px-6 py-3 md:px-8 md:py-4 rounded-2xl font-bold shadow-xl shadow-slate-300 hover:scale-105 active:scale-95 transition-all text-sm md:text-lg flex items-center gap-2 group hover:bg-black">
+                        <button onClick={() => { setIsEditing(false); setNewTitle(""); setNewText(""); setView('CREATE'); }} className="bg-slate-900 text-white px-6 py-3 md:px-8 md:py-4 rounded-2xl font-bold shadow-xl shadow-slate-300 hover:scale-105 active:scale-95 transition-all text-sm md:text-lg flex items-center gap-2 group hover:bg-black">
                             <span className="bg-white/20 rounded-full w-6 h-6 flex items-center justify-center text-xs">+</span>
                             <span className="group-hover:translate-x-1 transition-transform">Bài học mới</span>
                         </button>
                     </header>
 
                     <div className="flex-1 overflow-y-auto pb-8 custom-scrollbar">
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 px-2">
-                            {lessons.map(l => (
-                                <div key={l.id} onClick={() => selectLesson(l)} className="glass-panel p-6 md:p-8 rounded-[2rem] shadow-sm hover:shadow-[0_20px_60px_rgba(99,102,241,0.25)] hover:-translate-y-2 hover:border-indigo-300 transition-all duration-500 cursor-pointer relative overflow-hidden group bg-white/40">
-                                    <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-indigo-500/10 to-transparent rounded-full blur-2xl group-hover:bg-indigo-500/20 transition-colors duration-500"></div>
-                                    <div className="absolute bottom-0 left-0 w-32 h-32 bg-gradient-to-tr from-purple-500/10 to-transparent rounded-full blur-2xl group-hover:bg-purple-500/20 transition-colors duration-500"></div>
+                        {isFetching ? (
+                            <div className="flex flex-col items-center justify-center h-64 text-slate-400">
+                                <div className="w-10 h-10 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin mb-4"></div>
+                                <p className="animate-pulse font-medium">Đang tải bài học...</p>
+                            </div>
+                        ) : lessons.length === 0 ? (
+                            <div className="text-center py-20 opacity-50">
+                                <p className="text-xl font-medium">Chưa có bài học nào</p>
+                                <p className="text-sm">Bấm "Bài học mới" để bắt đầu nhe!</p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 px-2">
+                                {lessons.map(l => (
+                                    <div key={l.id} onClick={() => selectLesson(l)} className="glass-panel p-6 md:p-8 rounded-4xl shadow-sm hover:shadow-[0_20px_60px_rgba(99,102,241,0.25)] hover:-translate-y-2 hover:border-indigo-300 transition-all duration-500 cursor-pointer relative overflow-hidden group bg-white/40">
+                                        <div className="absolute top-0 right-0 w-32 h-32 bg-linear-to-br from-indigo-500/10 to-transparent rounded-full blur-2xl group-hover:bg-indigo-500/20 transition-colors duration-500"></div>
+                                        <div className="absolute bottom-0 left-0 w-32 h-32 bg-linear-to-tr from-purple-500/10 to-transparent rounded-full blur-2xl group-hover:bg-purple-500/20 transition-colors duration-500"></div>
 
-                                    <div className="relative z-10 flex flex-col h-full">
-                                        <div className="w-14 h-14 rounded-2xl bg-white border border-white/80 flex items-center justify-center text-2xl mb-6 shadow-sm group-hover:scale-110 group-hover:rotate-3 group-hover:shadow-md transition-all">
-                                            📚
-                                        </div>
-                                        <h3 className="font-bold text-xl md:text-2xl text-slate-800 mb-2 line-clamp-2 leading-tight group-hover:text-indigo-700 transition-colors">{l.title}</h3>
-                                        <div className="mt-auto pt-6 flex items-center gap-2 text-slate-400 text-xs md:text-sm font-bold group-hover:text-indigo-600 transition-colors uppercase tracking-wider">
-                                            <span>Bắt đầu ngay</span>
-                                            <span className="group-hover:translate-x-2 transition-transform">➜</span>
+                                        <div className="relative z-10 flex flex-col h-full">
+                                            <div className="flex justify-between items-start mb-6">
+                                                <div className="w-14 h-14 rounded-2xl bg-white border border-white/80 flex items-center justify-center text-2xl shadow-sm group-hover:scale-110 group-hover:rotate-3 group-hover:shadow-md transition-all">
+                                                    📚
+                                                </div>
+                                                <div className="flex gap-2 transition-opacity">
+                                                    <button
+                                                        onClick={(e) => startEdit(e, l)}
+                                                        className="p-2 bg-white/50 hover:bg-white text-blue-600 rounded-xl hover:shadow-md transition-all"
+                                                        title="Sửa"
+                                                    >
+                                                        ✏️
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => handleDelete(e, l.id)}
+                                                        className="p-2 bg-white/50 hover:bg-white text-red-500 rounded-xl hover:shadow-md transition-all"
+                                                        title="Xóa"
+                                                    >
+                                                        🗑️
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <h3 className="font-bold text-xl md:text-2xl text-slate-800 mb-2 line-clamp-2 leading-tight group-hover:text-indigo-700 transition-colors">{l.title}</h3>
+                                            <div className="mt-auto pt-6 flex items-center gap-2 text-slate-400 text-xs md:text-sm font-bold group-hover:text-indigo-600 transition-colors uppercase tracking-wider">
+                                                <span>Bắt đầu ngay</span>
+                                                <span className="group-hover:translate-x-2 transition-transform">➜</span>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
 
             {view === 'CREATE' && (
                 <div className="max-w-3xl mx-auto p-12 relative z-10 animate-slide-up">
-                    <h2 className="text-3xl font-bold mb-8 text-slate-900">Soạn bài mới</h2>
+                    <h2 className="text-3xl font-bold mb-8 text-slate-900">{isEditing ? 'Chỉnh sửa bài học' : 'Soạn bài mới'}</h2>
                     <div className="space-y-6">
-                        <input className="w-full p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-medium" placeholder="Tiêu đề..." value={newTitle} onChange={e => setNewTitle(e.target.value)} />
-                        <textarea className="w-full h-80 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-mono text-sm leading-relaxed" placeholder="Nội dung..." value={newText} onChange={e => setNewText(e.target.value)} />
-                        <div className="flex gap-4 pt-4"><button onClick={() => setView('DASHBOARD')} className="flex-1 py-4 rounded-2xl font-bold text-slate-500 hover:bg-slate-100">Hủy</button><button onClick={handleCreate} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl hover:bg-indigo-700">Lưu</button></div>
+                        <input className="w-full p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-medium" placeholder="Tiêu đề..." value={newTitle} onChange={e => setNewTitle(e.target.value)} disabled={isLoading} />
+                        <textarea className="w-full h-80 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-mono text-sm leading-relaxed" placeholder="Nội dung..." value={newText} onChange={e => setNewText(e.target.value)} disabled={isLoading} />
+                        <div className="flex gap-4 pt-4">
+                            <button onClick={resetCreate} className="flex-1 py-4 rounded-2xl font-bold text-slate-500 hover:bg-slate-100" disabled={isLoading}>Hủy</button>
+                            <button onClick={handleCreateOrUpdate} disabled={isLoading} className={`flex-1 py-4 text-white rounded-2xl font-bold shadow-xl transition-all ${isLoading ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                                {isLoading ? 'Đang xử lý...' : 'Lưu'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

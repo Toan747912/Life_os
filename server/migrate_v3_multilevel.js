@@ -2,18 +2,20 @@ const { Client } = require('pg');
 require('dotenv').config();
 
 // Ưu tiên dùng biến môi trường DATABASE_URL (cho Cloud), nếu không có thì dùng localhost
-const config = process.env.DATABASE_URL
-    ? {
-        connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false } // Bắt buộc cho Neon/Render Postgres
-    }
-    : {
-        user: 'postgres',
-        password: 'ngoquoctoan1234',
-        host: 'localhost',
-        database: 'life_os',
-        port: 5432,
-    };
+const config =
+// process.env.DATABASE_URL
+// ? {
+//     connectionString: process.env.DATABASE_URL,
+//     ssl: { rejectUnauthorized: false } // Bắt buộc cho Neon/Render Postgres
+// }
+// : {
+{
+    user: 'postgres',
+    password: 'ngoquoctoan1234',
+    host: 'localhost',
+    database: 'life_os',
+    port: 5432,
+};
 
 const migrate = async () => {
     const client = new Client(config);
@@ -28,6 +30,16 @@ const migrate = async () => {
             console.log("Added 'word_count' column.");
         } catch (e) {
             if (e.code === '42701') console.log("'word_count' column already exists.");
+            else console.error("Error adding column:", e.message);
+        }
+
+        // 1.5 Add difficulty to sentences if not exists
+        console.log("Checking 'sentences' table for 'difficulty'...");
+        try {
+            await client.query("ALTER TABLE sentences ADD COLUMN difficulty VARCHAR(20) DEFAULT 'EASY';");
+            console.log("Added 'difficulty' column.");
+        } catch (e) {
+            if (e.code === '42701') console.log("'difficulty' column already exists.");
             else console.error("Error adding column:", e.message);
         }
 

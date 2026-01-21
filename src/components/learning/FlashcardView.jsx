@@ -36,3 +36,14 @@ const FlashcardView = ({ question, answer }) => {
 };
 
 export default FlashcardView;
+
+
+
+
+
+
+
+
+
+
+

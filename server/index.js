@@ -10,18 +10,19 @@ app.use(bodyParser.json());
 
 // CẤU HÌNH KẾT NỐI DATABASE
 const pool = new Pool(
-    process.env.DATABASE_URL
-        ? {
-            connectionString: process.env.DATABASE_URL,
-            ssl: { rejectUnauthorized: false } // Bắt buộc cho Supabase/Render
-        }
-        : {
-            user: 'postgres',
-            host: 'localhost',
-            database: 'life_os',
-            password: 'ngoquoctoan1234',
-            port: 5432,
-        }
+    // process.env.DATABASE_URL
+    //     ? {
+    //         connectionString: process.env.DATABASE_URL,
+    //         ssl: { rejectUnauthorized: false } // Bắt buộc cho Supabase/Render
+    //     }
+    //     : {
+    {
+        user: 'postgres',
+        host: 'localhost',
+        database: 'life_os',
+        password: 'ngoquoctoan1234',
+        port: 5432,
+    }
 );
 
 // --- HELPER FUNCTIONS ---
@@ -105,6 +106,7 @@ app.get('/api/lessons/:id', async (req, res) => {
 });
 
 // API 3: Thêm bài học mới (Updated Logic)
+// API 3: Thêm bài học mới (Updated Logic)
 app.post('/api/lessons', async (req, res) => {
     const { title, text } = req.body;
 
@@ -136,6 +138,74 @@ app.post('/api/lessons', async (req, res) => {
 
         await client.query('COMMIT');
         res.json({ success: true, lessonId });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error(e);
+        res.status(500).json(e);
+    } finally {
+        client.release();
+    }
+});
+
+// API 4: Update bài học (PUT)
+app.put('/api/lessons/:id', async (req, res) => {
+    const { id } = req.params;
+    const { title, text } = req.body;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 1. Update Title
+        await client.query('UPDATE lessons SET title = $1 WHERE id = $2', [title, id]);
+
+        // 2. If text is provided, regenerate sentences
+        if (text) {
+            // Delete old sentences
+            await client.query('DELETE FROM sentences WHERE lesson_id = $1', [id]);
+
+            // Process new text
+            const rawSentences = text.match(/[^.!?]+[.!?]+/g) || [];
+            const sentencesToProcess = rawSentences.length > 0 ? rawSentences : text.split(/\n+/).filter(s => s.trim().length > 0);
+
+            for (let i = 0; i < sentencesToProcess.length; i++) {
+                const s = sentencesToProcess[i].trim();
+                if (s.length > 0) {
+                    const wordCount = countWords(s);
+                    let level = 'EASY';
+                    if (wordCount > 15) level = 'HARD';
+                    else if (wordCount > 8) level = 'MEDIUM';
+
+                    await client.query(
+                        'INSERT INTO sentences(lesson_id, content, "order", difficulty, word_count) VALUES($1, $2, $3, $4, $5)',
+                        [id, s, i, level, wordCount]
+                    );
+                }
+            }
+        }
+
+        await client.query('COMMIT');
+        res.json({ success: true });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error(e);
+        res.status(500).json(e);
+    } finally {
+        client.release();
+    }
+});
+
+// API 5: Xóa bài học (DELETE)
+app.delete('/api/lessons/:id', async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        // Delete sentences first (manual cascade)
+        await client.query('DELETE FROM sentences WHERE lesson_id = $1', [id]);
+        // Delete lesson
+        await client.query('DELETE FROM lessons WHERE id = $1', [id]);
+        await client.query('COMMIT');
+        res.json({ success: true });
     } catch (e) {
         await client.query('ROLLBACK');
         console.error(e);
