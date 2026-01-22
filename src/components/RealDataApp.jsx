@@ -2,15 +2,21 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ClozeParagraphMode, ParagraphReorderMode, ErrorHuntMode } from './learning/AdvancedReviewModes';
 import { DeepFocusMode } from './learning/DeepFocusMode';
 import { TransformationMode } from './learning/TransformationMode';
+import SettingsModal from './SettingsModal'; // Import settings modal
 
 // =======================
 // 1. SHARED & UTILS
 // =======================
-const speak = (text, rate = 1.0) => {
+const speak = (text, rate = null) => {
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US'; utterance.rate = rate;
+    utterance.lang = 'en-US';
+
+    // Use global speech rate from localStorage if not specified
+    const globalRate = localStorage.getItem('speechRate');
+    utterance.rate = rate || (globalRate ? parseFloat(globalRate) : 1.0);
+
     const voices = window.speechSynthesis.getVoices();
     const preferredVoice = voices.find(v => v.name.includes("Google US") || v.name.includes("Samantha"));
     if (preferredVoice) utterance.voice = preferredVoice;
@@ -498,6 +504,7 @@ export default function RealDataApp() {
     const [isFetching, setIsFetching] = useState(true);
     const [isReviewMode, setIsReviewMode] = useState(false);
     const [transformationSubMode, setTransformationSubMode] = useState('REORDER'); // 'REORDER' | 'HANDWRITING'
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false); // Settings modal state
 
     // STRUCTURED INPUT STATE
     const [inputMode, setInputMode] = useState('TEXT'); // TEXT | STRUCTURED
@@ -534,13 +541,53 @@ export default function RealDataApp() {
     const standardLessons = lessons.filter(l => l.type !== 'TRANSFORMATION');
     const transformationLessons = lessons.filter(l => l.type === 'TRANSFORMATION');
 
+    // Group Transformation Lessons by Title
+    const groupedTransformationLessons = transformationLessons.reduce((acc, lesson) => {
+        const existing = acc.find(g => g.title === lesson.title);
+        if (existing) {
+            existing.lessonIds.push(lesson.id);
+            existing.count++;
+        } else {
+            acc.push({
+                title: lesson.title,
+                lessonIds: [lesson.id],
+                count: 1,
+                type: 'TRANSFORMATION',
+                // Keep first lesson's id as representative
+                id: lesson.id
+            });
+        }
+        return acc;
+    }, []);
+
     useEffect(() => {
         if (view === 'DASHBOARD') {
             fetchLessons();
         }
     }, [view, fetchLessons]);
 
-    const selectLesson = (l) => { setSelectedLesson(l); fetch(`${API_URL}/lessons/${l.id}`).then(r => r.json()).then(d => { setLessonData(d); setView('DETAIL'); }); };
+    const selectLesson = (l) => {
+        setSelectedLesson(l);
+
+        // If it's a grouped transformation lesson, fetch all sentences from all lessons with that title
+        if (l.lessonIds && l.lessonIds.length > 1) {
+            Promise.all(l.lessonIds.map(id => fetch(`${API_URL}/lessons/${id}`).then(r => r.json())))
+                .then(results => {
+                    const combinedSentences = results.flat();
+                    setLessonData(combinedSentences);
+                    setView('DETAIL');
+                });
+        } else {
+            // Standard single lesson fetch
+            const lessonId = l.lessonIds ? l.lessonIds[0] : l.id;
+            fetch(`${API_URL}/lessons/${lessonId}`)
+                .then(r => r.json())
+                .then(d => {
+                    setLessonData(d);
+                    setView('DETAIL');
+                });
+        }
+    };
 
     const handleGenerateDistractors = async (index) => {
         const row = structuredRows[index];
@@ -585,14 +632,32 @@ export default function RealDataApp() {
                     }))
                 };
 
-                // Currently only supporting CREATE for structured
-                // (Update logic would need to handle ID mapping, keeping it simple for now as per task scope)
-                const res = await fetch(`${API_URL}/structured-lesson`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (!res.ok) throw new Error("Failed to save structured lesson");
+                if (isEditing) {
+                    // UPDATE: Delete all old lessons with this title, then create new one
+                    // This handles grouped lessons - all lessons with same title will be replaced
+                    const lessonsToDelete = transformationLessons.filter(l => l.title === newTitle);
+
+                    // Delete all lessons with the same title
+                    await Promise.all(lessonsToDelete.map(l =>
+                        fetch(`${API_URL}/lessons/${l.id}`, { method: 'DELETE' })
+                    ));
+
+                    // Create new lesson with updated content
+                    const res = await fetch(`${API_URL}/structured-lesson`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error("Failed to update structured lesson");
+                } else {
+                    // CREATE: Simple POST
+                    const res = await fetch(`${API_URL}/structured-lesson`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error("Failed to save structured lesson");
+                }
 
             } else {
                 // STANDARD TEXT SAVE
@@ -661,6 +726,38 @@ export default function RealDataApp() {
                 setNewText(reconstructedText);
                 setIsEditing(true);
                 setCurrentLessonId(lesson.id);
+                setInputMode('TEXT'); // Force text mode for standard lessons
+                setView('CREATE');
+            })
+            .catch(err => {
+                console.error(err);
+                alert("Không thể tải nội dung bài học để sửa.");
+            })
+            .finally(() => setIsLoading(false));
+    };
+
+    const startEditTransformation = (e, lesson) => {
+        e.stopPropagation();
+        setNewTitle(lesson.title);
+        setIsLoading(true);
+
+        fetch(`${API_URL}/lessons/${lesson.id}`)
+            .then(r => r.json())
+            .then(sentences => {
+                // Load sentences into structured rows
+                const rows = sentences.map(s => ({
+                    context: s.context || '',
+                    prompt: s.prompt || '',
+                    answer: s.content || '',
+                    distractors: Array.isArray(s.distractors)
+                        ? s.distractors.join(', ')
+                        : (typeof s.distractors === 'string' ? JSON.parse(s.distractors).join(', ') : '')
+                }));
+
+                setStructuredRows(rows);
+                setIsEditing(true);
+                setCurrentLessonId(lesson.id);
+                setInputMode('STRUCTURED'); // Force structured mode for transformation
                 setView('CREATE');
             })
             .catch(err => {
@@ -706,10 +803,21 @@ export default function RealDataApp() {
                             <h1 className="text-4xl md:text-6xl font-black text-slate-900 tracking-tighter mb-2 gradient-text filter drop-shadow-sm">Learning Station</h1>
                             <p className="text-slate-500 text-base md:text-lg font-medium opacity-80">Nền tảng học tập thông minh & hiện đại</p>
                         </div>
-                        <button onClick={() => { setIsEditing(false); setNewTitle(""); setNewText(""); setView('CREATE'); }} className="bg-slate-900 text-white px-6 py-3 md:px-8 md:py-4 rounded-2xl font-bold shadow-xl shadow-slate-300 hover:scale-105 active:scale-95 transition-all text-sm md:text-lg flex items-center gap-2 group hover:bg-black">
-                            <span className="bg-white/20 rounded-full w-6 h-6 flex items-center justify-center text-xs">+</span>
-                            <span className="group-hover:translate-x-1 transition-transform">Bài học mới</span>
-                        </button>
+                        <div className="flex gap-3">
+                            {/* Settings Button */}
+                            <button
+                                onClick={() => setIsSettingsOpen(true)}
+                                className="bg-slate-100 hover:bg-slate-200 text-slate-700 p-4 rounded-2xl font-bold shadow-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center"
+                                title="Settings"
+                            >
+                                <span className="text-2xl">⚙️</span>
+                            </button>
+                            {/* New Lesson Button */}
+                            <button onClick={() => { setIsEditing(false); setNewTitle(""); setNewText(""); setView('CREATE'); }} className="bg-slate-900 text-white px-6 py-3 md:px-8 md:py-4 rounded-2xl font-bold shadow-xl shadow-slate-300 hover:scale-105 active:scale-95 transition-all text-sm md:text-lg flex items-center gap-2 group hover:bg-black">
+                                <span className="bg-white/20 rounded-full w-6 h-6 flex items-center justify-center text-xs">+</span>
+                                <span className="group-hover:translate-x-1 transition-transform">Bài học mới</span>
+                            </button>
+                        </div>
                     </header>
 
                     <div className="flex-1 overflow-y-auto pb-8 custom-scrollbar space-y-12">
@@ -780,10 +888,10 @@ export default function RealDataApp() {
                                     <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-3">
                                         <span className="bg-pink-100 text-pink-600 p-2 rounded-xl text-xl">🪄</span>
                                         Luyện Biến Đổi Câu
-                                        <span className="text-sm font-normal text-slate-400 ml-2 bg-slate-100 px-3 py-1 rounded-full">{transformationLessons.length}</span>
+                                        <span className="text-sm font-normal text-slate-400 ml-2 bg-slate-100 px-3 py-1 rounded-full">{groupedTransformationLessons.length}</span>
                                     </h2>
 
-                                    {transformationLessons.length === 0 ? (
+                                    {groupedTransformationLessons.length === 0 ? (
                                         <div className="flex flex-col items-center justify-center p-12 text-center bg-slate-50/50 rounded-3xl border border-dashed border-slate-200">
                                             <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-3xl mb-4 text-slate-400 grayscale opacity-50">🪄</div>
                                             <p className="text-slate-500 font-medium text-lg">Chưa có bài tập biến đổi câu nào</p>
@@ -791,8 +899,8 @@ export default function RealDataApp() {
                                         </div>
                                     ) : (
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
-                                            {transformationLessons.map(l => (
-                                                <div key={l.id} onClick={() => selectLesson(l)} className="glass-panel p-6 md:p-8 rounded-4xl shadow-sm hover:shadow-[0_20px_60px_rgba(236,72,153,0.25)] hover:-translate-y-2 hover:border-pink-300 transition-all duration-500 cursor-pointer relative overflow-hidden group bg-white/40">
+                                            {groupedTransformationLessons.map((group, idx) => (
+                                                <div key={`group-${idx}`} onClick={() => selectLesson(group)} className="glass-panel p-6 md:p-8 rounded-4xl shadow-sm hover:shadow-[0_20px_60px_rgba(236,72,153,0.25)] hover:-translate-y-2 hover:border-pink-300 transition-all duration-500 cursor-pointer relative overflow-hidden group bg-white/40">
                                                     <div className="absolute top-0 right-0 w-32 h-32 bg-linear-to-br from-pink-500/10 to-transparent rounded-full blur-2xl group-hover:bg-pink-500/20 transition-colors duration-500"></div>
 
                                                     <div className="relative z-10 flex flex-col h-full">
@@ -800,9 +908,60 @@ export default function RealDataApp() {
                                                             <div className="w-14 h-14 rounded-2xl bg-pink-50 border border-white/80 flex items-center justify-center text-2xl shadow-sm group-hover:scale-110 group-hover:-rotate-3 group-hover:shadow-md transition-all text-pink-500">
                                                                 ⚡
                                                             </div>
+                                                            {/* Show edit/delete for all grouped cards */}
                                                             <div className="flex gap-2 transition-opacity">
                                                                 <button
-                                                                    onClick={(e) => handleDelete(e, l.id)}
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        // For grouped lessons, load all sentences from all lessons in the group
+                                                                        if (group.count > 1) {
+                                                                            setIsLoading(true);
+                                                                            Promise.all(group.lessonIds.map(id => fetch(`${API_URL}/lessons/${id}`).then(r => r.json())))
+                                                                                .then(results => {
+                                                                                    const allSentences = results.flat();
+                                                                                    const rows = allSentences.map(s => ({
+                                                                                        context: s.context || '',
+                                                                                        prompt: s.prompt || '',
+                                                                                        answer: s.content || '',
+                                                                                        distractors: Array.isArray(s.distractors)
+                                                                                            ? s.distractors.join(', ')
+                                                                                            : (typeof s.distractors === 'string' ? JSON.parse(s.distractors).join(', ') : '')
+                                                                                    }));
+                                                                                    setStructuredRows(rows);
+                                                                                    setNewTitle(group.title);
+                                                                                    setIsEditing(true);
+                                                                                    setCurrentLessonId(group.lessonIds[0]); // Use first lesson ID as reference
+                                                                                    setInputMode('STRUCTURED');
+                                                                                    setView('CREATE');
+                                                                                })
+                                                                                .catch(err => {
+                                                                                    console.error(err);
+                                                                                    alert("Không thể tải nội dung nhóm bài học.");
+                                                                                })
+                                                                                .finally(() => setIsLoading(false));
+                                                                        } else {
+                                                                            // Single lesson - use existing logic
+                                                                            const originalLesson = transformationLessons.find(l => l.id === group.lessonIds[0]);
+                                                                            startEditTransformation(e, originalLesson);
+                                                                        }
+                                                                    }}
+                                                                    className="p-2 bg-white/50 hover:bg-white text-blue-600 rounded-xl hover:shadow-md transition-all"
+                                                                    title="Sửa"
+                                                                >
+                                                                    ✏️
+                                                                </button>
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        // Delete all lessons in the group
+                                                                        if (!window.confirm(`Bạn có chắc muốn xóa ${group.count > 1 ? `${group.count} bài học` : 'bài học này'}?`)) return;
+                                                                        if (isLoading) return;
+                                                                        setIsLoading(true);
+                                                                        Promise.all(group.lessonIds.map(id => fetch(`${API_URL}/lessons/${id}`, { method: 'DELETE' })))
+                                                                            .then(() => fetchLessons())
+                                                                            .catch(err => alert("Có lỗi xóa bài: " + err.message))
+                                                                            .finally(() => setIsLoading(false));
+                                                                    }}
                                                                     className="p-2 bg-white/50 hover:bg-white text-red-500 rounded-xl hover:shadow-md transition-all"
                                                                     title="Xóa"
                                                                 >
@@ -811,7 +970,15 @@ export default function RealDataApp() {
                                                             </div>
                                                         </div>
 
-                                                        <h3 className="font-bold text-xl md:text-2xl text-slate-800 mb-2 line-clamp-2 leading-tight group-hover:text-pink-600 transition-colors">{l.title}</h3>
+                                                        <h3 className="font-bold text-xl md:text-2xl text-slate-800 mb-2 line-clamp-2 leading-tight group-hover:text-pink-600 transition-colors">{group.title}</h3>
+
+                                                        {/* Show grouped count if multiple lessons */}
+                                                        {group.count > 1 && (
+                                                            <p className="text-xs text-pink-500 font-bold bg-pink-50 px-2 py-1 rounded-lg inline-block mb-2">
+                                                                {group.count} bài học được gộp
+                                                            </p>
+                                                        )}
+
                                                         <div className="mt-auto pt-6 flex items-center gap-2 text-slate-400 text-xs md:text-sm font-bold group-hover:text-pink-600 transition-colors uppercase tracking-wider">
                                                             <span>Luyện ngay</span>
                                                             <span className="group-hover:translate-x-2 transition-transform">➜</span>
@@ -1063,6 +1230,9 @@ export default function RealDataApp() {
             {view === 'MODE_ERROR_HUNT' && <ErrorHuntMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_DEEP_FOCUS' && <DeepFocusMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_TRANSFORMATION' && <TransformationMode sentences={lessonData} onBack={() => setView('DETAIL')} mode={transformationSubMode} />}
+
+            {/* Settings Modal */}
+            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
         </div>
     );
 }

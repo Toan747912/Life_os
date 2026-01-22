@@ -6,6 +6,11 @@ const speak = (text) => {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'en-US';
+
+    // Use global speech rate from localStorage
+    const globalRate = localStorage.getItem('speechRate');
+    utterance.rate = globalRate ? parseFloat(globalRate) : 1.0;
+
     const voices = window.speechSynthesis.getVoices();
     const preferredVoice = voices.find(v => v.name.includes("Google US") || v.name.includes("Samantha"));
     if (preferredVoice) utterance.voice = preferredVoice;

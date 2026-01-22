@@ -4,22 +4,38 @@ const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const Groq = require('groq-sdk');
 
 const app = express();
 app.use(cors());
 // Tăng giới hạn của body-parser để nhận ảnh base64
 app.use(bodyParser.json({ limit: '10mb' }));
 
-// --- CẤU HÌNH GEMINI ---
-// Khởi tạo Gemini client. API key phải được đặt trong file .env
+// --- CẤU HÌNH AI PROVIDERS ---
+// Priority: Groq (free tier 14,400 req/day) → Gemini (free tier 20 req/day)
+let groqClient;
 let genAI;
 let visionModel;
+
+// Initialize Groq
+if (process.env.GROQ_API_KEY) {
+    groqClient = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    console.log("✅ Groq AI Initialized Successfully (Primary Provider).");
+} else {
+    console.warn("⚠️  Warning: GROQ_API_KEY not found in .env file. Falling back to Gemini.");
+}
+
+// Initialize Gemini (as fallback)
 if (process.env.GEMINI_API_KEY) {
     genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     visionModel = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-    console.log("✅ Gemini AI Initialized Successfully.");
+    console.log(groqClient ? "✅ Gemini AI Initialized (Fallback Provider)." : "✅ Gemini AI Initialized Successfully.");
 } else {
     console.warn("⚠️  Warning: GEMINI_API_KEY not found in .env file. Gemini features will be disabled.");
+}
+
+if (!groqClient && !genAI) {
+    console.error("❌ ERROR: No AI providers configured! Please add GROQ_API_KEY or GEMINI_API_KEY to .env");
 }
 
 // CẤU HÌNH KẾT NỐI DATABASE
@@ -222,17 +238,15 @@ app.post('/api/structured-lesson', async (req, res) => {
     }
 });
 
-// API 3.6: Generate Distractors (Gemini)
+// API 3.6: Generate Distractors (Groq/Gemini)
 app.post('/api/generate-distractors', async (req, res) => {
-    if (!genAI) {
-        return res.status(503).json({ error: "Gemini AI not initialized" });
+    if (!groqClient && !genAI) {
+        return res.status(503).json({ error: "No AI providers available" });
     }
 
     const { sentence, prompt } = req.body;
 
     try {
-        // Trying gemini-flash-latest as it is used for vision
-        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
         const aiPrompt = `
             Task: Generate 5-6 single-word distractors for a sentence scrambling game.
             Target Sentence: "${sentence}"
@@ -247,11 +261,41 @@ app.post('/api/generate-distractors', async (req, res) => {
             Example Output: ["bad", "mistake", "error", "problem", "fault"]
         `;
 
-        const result = await model.generateContent(aiPrompt);
-        const response = await result.response;
-        const text = response.text();
+        let text;
 
-        console.log("[POST /api/generate-distractors] Raw AI Response:", text);
+        // Try Groq first
+        if (groqClient) {
+            try {
+                console.log("[POST /api/generate-distractors] Using Groq AI...");
+                const completion = await groqClient.chat.completions.create({
+                    messages: [{ role: "user", content: aiPrompt }],
+                    model: "llama-3.3-70b-versatile",
+                    temperature: 0.7,
+                    max_tokens: 200
+                });
+                text = completion.choices[0]?.message?.content || "";
+                console.log("[POST /api/generate-distractors] Groq Response:", text);
+            } catch (groqError) {
+                console.warn("[POST /api/generate-distractors] Groq failed, falling back to Gemini:", groqError.message);
+                if (genAI) {
+                    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+                    const result = await model.generateContent(aiPrompt);
+                    const response = await result.response;
+                    text = response.text();
+                    console.log("[POST /api/generate-distractors] Gemini Response:", text);
+                } else {
+                    throw groqError;
+                }
+            }
+        } else if (genAI) {
+            // Use Gemini if Groq not available
+            console.log("[POST /api/generate-distractors] Using Gemini AI...");
+            const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+            const result = await model.generateContent(aiPrompt);
+            const response = await result.response;
+            text = response.text();
+            console.log("[POST /api/generate-distractors] Gemini Response:", text);
+        }
 
         // Robust JSON extraction
         const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -267,7 +311,7 @@ app.post('/api/generate-distractors', async (req, res) => {
         res.status(500).json({
             error: "Failed to generate distractors",
             details: error.message,
-            rawResponse: error.rawResponse // Custom field if we added it, but good for now
+            rawResponse: error.rawResponse
         });
     }
 });
@@ -496,10 +540,10 @@ app.post('/api/study/save-progress', async (req, res) => {
     }
 });
 
-// --- NEW GEMINI API ---
+// --- GROQ/GEMINI HANDWRITING RECOGNITION API ---
 app.post('/api/recognize-handwriting', async (req, res) => {
-    if (!visionModel) {
-        return res.status(503).json({ error: "Gemini AI not initialized. Check server logs for API key issues." });
+    if (!groqClient && !visionModel) {
+        return res.status(503).json({ error: "No AI vision providers available. Check server logs for API key issues." });
     }
 
     try {
@@ -508,27 +552,78 @@ app.post('/api/recognize-handwriting', async (req, res) => {
             return res.status(400).json({ error: "No image data provided." });
         }
 
-        // Gemini cần data ảnh dạng base64 thuần, không có tiền tố data:image/...
-        const imagePart = {
-            inlineData: {
-                data: image.replace(/^data:image\/(png|jpeg);base64,/, ""),
-                mimeType: "image/png"
-            }
-        };
-
         const prompt = "Transcribe the handwritten text in this image. Be as accurate as possible. Only return the transcribed text.";
+        let text;
 
-        const result = await visionModel.generateContent([prompt, imagePart]);
-        const response = await result.response;
-        const text = response.text();
+        // Try Groq first (uses vision model)
+        if (groqClient) {
+            try {
+                console.log("[POST /api/recognize-handwriting] Using Groq Vision Model...");
 
-        console.log("[POST /api/recognize-handwriting] Recognized Text:", text);
+                // Groq expects base64 data without the data:image prefix
+                const base64Data = image.replace(/^data:image\/(png|jpeg|jpg);base64,/, "");
+
+                const completion = await groqClient.chat.completions.create({
+                    messages: [
+                        {
+                            role: "user",
+                            content: [
+                                { type: "text", text: prompt },
+                                {
+                                    type: "image_url",
+                                    image_url: {
+                                        url: `data:image/png;base64,${base64Data}`
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    model: "llama-3.2-90b-vision-preview",
+                    temperature: 0.3,
+                    max_tokens: 500
+                });
+
+                text = completion.choices[0]?.message?.content || "";
+                console.log("[POST /api/recognize-handwriting] Groq Recognized Text:", text);
+            } catch (groqError) {
+                console.warn("[POST /api/recognize-handwriting] Groq failed, falling back to Gemini:", groqError.message);
+                if (visionModel) {
+                    // Fallback to Gemini
+                    const imagePart = {
+                        inlineData: {
+                            data: image.replace(/^data:image\/(png|jpeg);base64,/, ""),
+                            mimeType: "image/png"
+                        }
+                    };
+                    const result = await visionModel.generateContent([prompt, imagePart]);
+                    const response = await result.response;
+                    text = response.text();
+                    console.log("[POST /api/recognize-handwriting] Gemini Recognized Text:", text);
+                } else {
+                    throw groqError;
+                }
+            }
+        } else if (visionModel) {
+            // Use Gemini if Groq not available
+            console.log("[POST /api/recognize-handwriting] Using Gemini Vision Model...");
+            const imagePart = {
+                inlineData: {
+                    data: image.replace(/^data:image\/(png|jpeg);base64,/, ""),
+                    mimeType: "image/png"
+                }
+            };
+            const result = await visionModel.generateContent([prompt, imagePart]);
+            const response = await result.response;
+            text = response.text();
+            console.log("[POST /api/recognize-handwriting] Gemini Recognized Text:", text);
+        }
+
         res.json({ text });
 
     } catch (error) {
         console.error("[POST /api/recognize-handwriting] ERROR DETAILS:", error);
         res.status(500).json({
-            error: "Failed to recognize handwriting with Gemini AI.",
+            error: "Failed to recognize handwriting.",
             details: error.message || error.toString()
         });
     }
