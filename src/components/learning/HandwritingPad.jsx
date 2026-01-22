@@ -111,6 +111,7 @@ const HandwritingPad = ({ onRecognized }) => {
           ref={canvasRef}
           width={500}
           height={200}
+          style={{ touchAction: 'none' }}
           onMouseDown={startDrawing}
           onMouseMove={draw}
           onMouseUp={stopDrawing}
