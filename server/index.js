@@ -58,11 +58,60 @@ const pool = new Pool(
 (async () => {
     try {
         const client = await pool.connect();
-        await client.query('ALTER TABLE sentences ADD COLUMN IF NOT EXISTS context TEXT'); // For "Original Sentence"
+
+        // 1. Ensure 'lessons' table exists (basic)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS lessons (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        `);
+
+        // 2. Ensure 'sentences' table and columns exist
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS sentences (
+                id SERIAL PRIMARY KEY,
+                lesson_id INTEGER REFERENCES lessons(id),
+                content TEXT NOT NULL,
+                "order" INTEGER,
+                difficulty TEXT,
+                word_count INTEGER,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        `);
+
+        // Add missing columns to sentences
+        const sentenceColumns = [
+            { name: 'context', type: 'TEXT' },
+            { name: 'prompt', type: 'TEXT' },
+            { name: 'distractors', type: 'TEXT' } // JSON stringified
+        ];
+
+        for (const col of sentenceColumns) {
+            await client.query(`ALTER TABLE sentences ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`);
+        }
+
+        // 3. Ensure 'user_progress' table exists
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS user_progress (
+                id SERIAL PRIMARY KEY,
+                lesson_id INTEGER REFERENCES lessons(id),
+                sentence_id INTEGER REFERENCES sentences(id),
+                selected_level INTEGER,
+                status TEXT,
+                current_arrangement JSONB,
+                time_remaining INTEGER,
+                audio_usage_count INTEGER,
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(lesson_id, sentence_id)
+            )
+        `);
+
         client.release();
-        console.log("✅ DB Migration: 'context' column checked/added.");
+        console.log("✅ DB Migration: All tables and columns verified/updated.");
     } catch (err) {
-        console.error("⚠️ DB Migration Failed:", err);
+        console.error("❌ DB Migration Failed:", err);
     }
 })();
 
