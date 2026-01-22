@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ClozeParagraphMode, ParagraphReorderMode, ErrorHuntMode } from './learning/AdvancedReviewModes';
+import { DeepFocusMode } from './learning/DeepFocusMode';
 
 // =======================
 // 1. SHARED & UTILS
@@ -731,6 +732,32 @@ export default function RealDataApp() {
                                 <div><h3 className="text-2xl font-bold">Xếp Từ Game</h3><p className="text-slate-400 group-hover:text-indigo-100">Tốc độ & Phản xạ</p></div>
                             </div>
                         </div>
+
+                        {/* NEW: DEEP FOCUS LOOP */}
+                        <div onClick={() => setView('MODE_DEEP_FOCUS')} className="col-span-1 md:col-span-2 bg-linear-to-r from-indigo-900 via-purple-900 to-slate-900 p-8 rounded-[2.5rem] shadow-2xl shadow-purple-900/40 hover:scale-[1.02] transition-all cursor-pointer flex items-center gap-8 text-white group relative overflow-hidden ring-4 ring-purple-500/20">
+                            {/* Animated glowing border effect */}
+                            <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/10 to-transparent translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-1000 z-0 pointer-events-none"></div>
+
+                            <div className="relative z-10 flex items-center gap-8 w-full justify-between px-4">
+                                <div className="flex items-center gap-6">
+                                    <div className="w-24 h-24 rounded-full bg-white/10 text-white flex items-center justify-center text-5xl backdrop-blur-md shadow-[0_0_30px_rgba(168,85,247,0.4)] border border-white/20 animate-pulse-soft">
+                                        🧠
+                                    </div>
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h3 className="text-3xl font-black tracking-tight text-transparent bg-clip-text bg-linear-to-r from-white to-purple-200">DEEP FOCUS LOOP</h3>
+                                            <span className="px-2 py-0.5 rounded text-[10px] bg-purple-500 font-bold uppercase tracking-wider">New</span>
+                                        </div>
+                                        <p className="text-purple-200 font-medium text-lg leading-snug max-w-lg">
+                                            Vòng lặp học sâu: Nghe <span className="text-white/40">•</span> Nhìn <span className="text-white/40">•</span> Tái cấu trúc <span className="text-white/40">•</span> Điền từ
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="hidden md:flex items-center justify-center w-16 h-16 rounded-full bg-white/10 group-hover:bg-white text-white group-hover:text-purple-900 transition-all text-2xl font-bold">
+                                    ➜
+                                </div>
+                            </div>
+                        </div>
                         {/* Review Corner */}
                         <div className="col-span-1 md:col-span-2 mt-4">
                             <h3 className="text-xl font-bold text-slate-700 mb-4 flex items-center gap-2">
@@ -792,6 +819,7 @@ export default function RealDataApp() {
             {view === 'MODE_CLOZE_PARA' && <ClozeParagraphMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_PARA_REORDER' && <ParagraphReorderMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_ERROR_HUNT' && <ErrorHuntMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
+            {view === 'MODE_DEEP_FOCUS' && <DeepFocusMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
         </div >
     );
 }
