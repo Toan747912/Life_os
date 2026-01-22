@@ -138,9 +138,14 @@ app.get('/api/lessons', async (req, res) => {
         console.log(`[GET /api/lessons] Found ${result.rows.length} lessons`);
         res.json(result.rows);
     } catch (err) {
-        console.error(err);
-        res.status(500).json(err);
+        console.error("[GET /api/lessons] DATABASE ERROR:", err);
+        res.status(500).json({
+            error: "Database error while fetching lessons",
+            details: err.message,
+            code: err.code
+        });
     }
+
 });
 
 // API 2: Lấy chi tiết các câu (Legacy view)

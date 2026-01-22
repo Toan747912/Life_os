@@ -486,8 +486,9 @@ const ReadMode = ({ sentences, onBack }) => (
 // =======================
 // 3. MAIN APP
 // =======================
-// Sử dụng biến môi trường VITE_API_URL nếu có, nếu không thì dùng localhost
+// --- CONFIGURATION ---
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
+console.log(`[RealDataApp] Using API_URL: ${API_URL}`);
 
 export default function RealDataApp() {
     const [view, setView] = useState('DASHBOARD');
@@ -533,7 +534,10 @@ export default function RealDataApp() {
                 if (Array.isArray(data)) setLessons(data);
                 else console.error("Invalid data format:", data);
             })
-            .catch(err => console.error("Fetch error:", err))
+            .catch(err => {
+                console.error("Fetch error:", err);
+                console.error("Failed to fetch lessons from:", `${API_URL}/lessons`);
+            })
             .finally(() => setIsFetching(false));
     }, []);
 
