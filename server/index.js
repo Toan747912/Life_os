@@ -38,6 +38,18 @@ const pool = new Pool(
         }
 );
 
+// --- DB MIGRATION CHECK ---
+(async () => {
+    try {
+        const client = await pool.connect();
+        await client.query('ALTER TABLE sentences ADD COLUMN IF NOT EXISTS context TEXT'); // For "Original Sentence"
+        client.release();
+        console.log("✅ DB Migration: 'context' column checked/added.");
+    } catch (err) {
+        console.error("⚠️ DB Migration Failed:", err);
+    }
+})();
+
 // --- HELPER FUNCTIONS ---
 
 // Tính số từ
@@ -98,7 +110,15 @@ function calculateTimeLimit(wordCount, level) {
 // API 1: Lấy danh sách bài học
 app.get('/api/lessons', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM lessons ORDER BY id DESC');
+        const result = await pool.query(`
+            SELECT l.*, 
+                CASE WHEN EXISTS (SELECT 1 FROM sentences s WHERE s.lesson_id = l.id AND s.prompt IS NOT NULL) 
+                        THEN 'TRANSFORMATION' 
+                        ELSE 'STANDARD' 
+                END as type
+            FROM lessons l 
+            ORDER BY l.id DESC
+        `);
         console.log(`[GET /api/lessons] Found ${result.rows.length} lessons`);
         res.json(result.rows);
     } catch (err) {
@@ -157,6 +177,98 @@ app.post('/api/lessons', async (req, res) => {
         res.status(500).json(e);
     } finally {
         client.release();
+    }
+
+});
+
+// API 3.5: Thêm bài học có cấu trúc (cho Sentence Transformation)
+app.post('/api/structured-lesson', async (req, res) => {
+    const { title, sentences } = req.body; // sentences: [{ content, prompt, distractors: [] }]
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const lessonRes = await client.query('INSERT INTO lessons(title) VALUES($1) RETURNING id', [title]);
+        const lessonId = lessonRes.rows[0].id;
+
+        for (let i = 0; i < sentences.length; i++) {
+            const s = sentences[i];
+            const content = s.content.trim();
+            const prompt = s.prompt || null;
+            const context = s.context || null; // NEW: Original Sentence
+            const distractors = JSON.stringify(s.distractors || []);
+
+            if (content.length > 0) {
+                const wordCount = countWords(content);
+                let level = 'EASY';
+                if (wordCount > 15) level = 'HARD';
+                else if (wordCount > 8) level = 'MEDIUM';
+
+                await client.query(
+                    'INSERT INTO sentences(lesson_id, content, "order", difficulty, word_count, prompt, distractors, context) VALUES($1, $2, $3, $4, $5, $6, $7, $8)',
+                    [lessonId, content, i, level, wordCount, prompt, distractors, context]
+                );
+            }
+        }
+
+        await client.query('COMMIT');
+        res.json({ success: true, lessonId });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error("[POST /api/structured-lesson] ERROR:", e);
+        res.status(500).json(e);
+    } finally {
+        client.release();
+    }
+});
+
+// API 3.6: Generate Distractors (Gemini)
+app.post('/api/generate-distractors', async (req, res) => {
+    if (!genAI) {
+        return res.status(503).json({ error: "Gemini AI not initialized" });
+    }
+
+    const { sentence, prompt } = req.body;
+
+    try {
+        // Trying gemini-flash-latest as it is used for vision
+        const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+        const aiPrompt = `
+            Task: Generate 5-6 single-word distractors for a sentence scrambling game.
+            Target Sentence: "${sentence}"
+            ${prompt ? `Keyword: "${prompt}"` : ''}
+            
+            Rules:
+            1. The distractors should be grammatically plausible but incorrect in the context of the target sentence.
+            2. They should be related words (synonyms, antonyms, similar spelling, same semantic field).
+            3. Do NOT include words that are already in the target sentence.
+            4. Return ONLY a JSON array of strings.
+            
+            Example Output: ["bad", "mistake", "error", "problem", "fault"]
+        `;
+
+        const result = await model.generateContent(aiPrompt);
+        const response = await result.response;
+        const text = response.text();
+
+        console.log("[POST /api/generate-distractors] Raw AI Response:", text);
+
+        // Robust JSON extraction
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) {
+            throw new Error("No JSON array found in response");
+        }
+
+        const distractors = JSON.parse(jsonMatch[0]);
+
+        res.json({ distractors });
+    } catch (error) {
+        console.error("[POST /api/generate-distractors] ERROR:", error);
+        res.status(500).json({
+            error: "Failed to generate distractors",
+            details: error.message,
+            rawResponse: error.rawResponse // Custom field if we added it, but good for now
+        });
     }
 });
 
@@ -242,12 +354,29 @@ app.get('/api/study/init/:lessonId', async (req, res) => {
 
         // 2. Process for Game
         const gameData = sentences.map(s => {
-            const { shuffled_words, word_count } = processSentenceForLevel(s.content, level, sentences);
+            let finalWords;
+            let distractors = [];
+
+            // Check if we have explicit distractors (Transformation Mode)
+            if (s.distractors && Array.isArray(s.distractors) && s.distractors.length > 0) {
+                distractors = s.distractors; // Use provided distractors
+                // For Transformation Mode, we shuffle content + distractors
+                const contentWords = s.content.split(/\s+/); // Plain split for now
+                finalWords = [...contentWords, ...distractors].sort(() => Math.random() - 0.5);
+            } else {
+                // Classic Auto-Generated Mode
+                const processed = processSentenceForLevel(s.content, level, sentences);
+                finalWords = processed.shuffled_words;
+            }
+
             return {
                 id: s.id,
-                shuffled_words, // Anti-cheat: Only return shuffled words
-                time_limit: calculateTimeLimit(word_count, level),
-                difficulty: s.difficulty // For reference
+                shuffled_words: finalWords, // Anti-cheat: Only return shuffled words
+                time_limit: calculateTimeLimit(s.word_count || countWords(s.content), level),
+                time_limit: calculateTimeLimit(s.word_count || countWords(s.content), level),
+                difficulty: s.difficulty, // For reference
+                prompt: s.prompt, // Include prompt if exists
+                context: s.context // NEW: Include context if exists
             };
         });
 

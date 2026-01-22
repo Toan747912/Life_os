@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ClozeParagraphMode, ParagraphReorderMode, ErrorHuntMode } from './learning/AdvancedReviewModes';
 import { DeepFocusMode } from './learning/DeepFocusMode';
+import { TransformationMode } from './learning/TransformationMode';
 
 // =======================
 // 1. SHARED & UTILS
@@ -496,6 +497,23 @@ export default function RealDataApp() {
     const [isLoading, setIsLoading] = useState(false);
     const [isFetching, setIsFetching] = useState(true);
     const [isReviewMode, setIsReviewMode] = useState(false);
+    const [transformationSubMode, setTransformationSubMode] = useState('REORDER'); // 'REORDER' | 'HANDWRITING'
+
+    // STRUCTURED INPUT STATE
+    const [inputMode, setInputMode] = useState('TEXT'); // TEXT | STRUCTURED
+    const [structuredRows, setStructuredRows] = useState([{ context: '', prompt: '', answer: '', distractors: '' }]);
+
+    const addRow = () => setStructuredRows([...structuredRows, { context: '', prompt: '', answer: '', distractors: '' }]);
+    const removeRow = (i) => {
+        const newRows = [...structuredRows];
+        newRows.splice(i, 1);
+        setStructuredRows(newRows);
+    };
+    const updateRow = (i, field, val) => {
+        const newRows = [...structuredRows];
+        newRows[i][field] = val;
+        setStructuredRows(newRows);
+    };
 
     const fetchLessons = useCallback(() => {
         setIsFetching(true);
@@ -512,6 +530,10 @@ export default function RealDataApp() {
             .finally(() => setIsFetching(false));
     }, []);
 
+    // Filter Logic
+    const standardLessons = lessons.filter(l => l.type !== 'TRANSFORMATION');
+    const transformationLessons = lessons.filter(l => l.type === 'TRANSFORMATION');
+
     useEffect(() => {
         if (view === 'DASHBOARD') {
             fetchLessons();
@@ -520,28 +542,82 @@ export default function RealDataApp() {
 
     const selectLesson = (l) => { setSelectedLesson(l); fetch(`${API_URL}/lessons/${l.id}`).then(r => r.json()).then(d => { setLessonData(d); setView('DETAIL'); }); };
 
+    const handleGenerateDistractors = async (index) => {
+        const row = structuredRows[index];
+        if (!row.answer) return alert("Vui lòng nhập 'Đáp án' trước để AI phân tích!");
+
+        setIsLoading(true);
+        try {
+            const res = await fetch(`${API_URL}/generate-distractors`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sentence: row.answer, prompt: row.prompt })
+            });
+            const data = await res.json();
+            if (data.distractors) {
+                updateRow(index, 'distractors', data.distractors.join(', '));
+            }
+        } catch (e) {
+            alert("Lỗi AI: " + e.message);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const handleCreateOrUpdate = async () => {
-        if (!newTitle || !newText) return alert("Nhập đủ!");
+        if (!newTitle) return alert("Nhập tiêu đề!");
+        if (inputMode === 'TEXT' && !newText) return alert("Nhập nội dung!");
+        if (inputMode === 'STRUCTURED' && structuredRows.every(r => !r.answer)) return alert("Nhập ít nhất một câu!");
+
         if (isLoading) return;
 
         setIsLoading(true);
         try {
-            const method = isEditing ? 'PUT' : 'POST';
-            const url = isEditing ? `${API_URL}/lessons/${currentLessonId}` : `${API_URL}/lessons`;
+            if (inputMode === 'STRUCTURED') {
+                // STRUCTURED SAVE (TRANSFORMATION)
+                const payload = {
+                    title: newTitle,
+                    sentences: structuredRows.filter(r => r.answer).map(r => ({
+                        content: r.answer,
+                        prompt: r.prompt,
+                        context: r.context,
+                        distractors: r.distractors.split(',').map(s => s.trim()).filter(s => s)
+                    }))
+                };
 
-            const res = await fetch(url, {
-                method: method,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: newTitle, text: newText })
-            });
+                // Currently only supporting CREATE for structured
+                // (Update logic would need to handle ID mapping, keeping it simple for now as per task scope)
+                const res = await fetch(`${API_URL}/structured-lesson`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) throw new Error("Failed to save structured lesson");
 
-            if (!res.ok) throw new Error("Failed to save");
+            } else {
+                // STANDARD TEXT SAVE
+                const method = isEditing ? 'PUT' : 'POST';
+                const url = isEditing ? `${API_URL}/lessons/${currentLessonId}` : `${API_URL}/lessons`;
+
+                const res = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: newTitle, text: newText })
+                });
+
+                if (!res.ok) throw new Error("Failed to save");
+            }
 
             setView('DASHBOARD');
             setNewTitle("");
             setNewText("");
+            setNewTitle("");
+            setNewText("");
+            setStructuredRows([{ context: '', prompt: '', answer: '', distractors: '' }]);
+            setIsEditing(false);
             setIsEditing(false);
             setCurrentLessonId(null);
+            fetchLessons(); // Refresh list
         } catch (error) {
             alert("Có lỗi xảy ra: " + error.message);
         } finally {
@@ -600,6 +676,8 @@ export default function RealDataApp() {
         setCurrentLessonId(null);
         setNewTitle("");
         setNewText("");
+        setStructuredRows([{ prompt: '', answer: '', distractors: '' }]);
+        setInputMode('TEXT');
     };
 
     return (
@@ -634,7 +712,7 @@ export default function RealDataApp() {
                         </button>
                     </header>
 
-                    <div className="flex-1 overflow-y-auto pb-8 custom-scrollbar">
+                    <div className="flex-1 overflow-y-auto pb-8 custom-scrollbar space-y-12">
                         {isFetching ? (
                             <div className="flex flex-col items-center justify-center h-64 text-slate-400">
                                 <div className="w-10 h-10 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin mb-4"></div>
@@ -646,55 +724,178 @@ export default function RealDataApp() {
                                 <p className="text-sm">Bấm "Bài học mới" để bắt đầu nhe!</p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 px-2">
-                                {lessons.map(l => (
-                                    <div key={l.id} onClick={() => selectLesson(l)} className="glass-panel p-6 md:p-8 rounded-4xl shadow-sm hover:shadow-[0_20px_60px_rgba(99,102,241,0.25)] hover:-translate-y-2 hover:border-indigo-300 transition-all duration-500 cursor-pointer relative overflow-hidden group bg-white/40">
-                                        <div className="absolute top-0 right-0 w-32 h-32 bg-linear-to-br from-indigo-500/10 to-transparent rounded-full blur-2xl group-hover:bg-indigo-500/20 transition-colors duration-500"></div>
-                                        <div className="absolute bottom-0 left-0 w-32 h-32 bg-linear-to-tr from-purple-500/10 to-transparent rounded-full blur-2xl group-hover:bg-purple-500/20 transition-colors duration-500"></div>
+                            <>
+                                {/* STANDARD LESSONS SECTION */}
+                                {standardLessons.length > 0 && (
+                                    <div className="px-2">
+                                        <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-3">
+                                            <span className="bg-indigo-100 text-indigo-600 p-2 rounded-xl text-xl">📚</span>
+                                            Tài Liệu Học Tập
+                                            <span className="text-sm font-normal text-slate-400 ml-2 bg-slate-100 px-3 py-1 rounded-full">{standardLessons.length}</span>
+                                        </h2>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
+                                            {standardLessons.map(l => (
+                                                <div key={l.id} onClick={() => selectLesson(l)} className="glass-panel p-6 md:p-8 rounded-4xl shadow-sm hover:shadow-[0_20px_60px_rgba(99,102,241,0.25)] hover:-translate-y-2 hover:border-indigo-300 transition-all duration-500 cursor-pointer relative overflow-hidden group bg-white/40">
+                                                    <div className="absolute top-0 right-0 w-32 h-32 bg-linear-to-br from-indigo-500/10 to-transparent rounded-full blur-2xl group-hover:bg-indigo-500/20 transition-colors duration-500"></div>
+                                                    <div className="absolute bottom-0 left-0 w-32 h-32 bg-linear-to-tr from-purple-500/10 to-transparent rounded-full blur-2xl group-hover:bg-purple-500/20 transition-colors duration-500"></div>
 
-                                        <div className="relative z-10 flex flex-col h-full">
-                                            <div className="flex justify-between items-start mb-6">
-                                                <div className="w-14 h-14 rounded-2xl bg-white border border-white/80 flex items-center justify-center text-2xl shadow-sm group-hover:scale-110 group-hover:rotate-3 group-hover:shadow-md transition-all">
-                                                    📚
-                                                </div>
-                                                <div className="flex gap-2 transition-opacity">
-                                                    <button
-                                                        onClick={(e) => startEdit(e, l)}
-                                                        className="p-2 bg-white/50 hover:bg-white text-blue-600 rounded-xl hover:shadow-md transition-all"
-                                                        title="Sửa"
-                                                    >
-                                                        ✏️
-                                                    </button>
-                                                    <button
-                                                        onClick={(e) => handleDelete(e, l.id)}
-                                                        className="p-2 bg-white/50 hover:bg-white text-red-500 rounded-xl hover:shadow-md transition-all"
-                                                        title="Xóa"
-                                                    >
-                                                        🗑️
-                                                    </button>
-                                                </div>
-                                            </div>
+                                                    <div className="relative z-10 flex flex-col h-full">
+                                                        <div className="flex justify-between items-start mb-6">
+                                                            <div className="w-14 h-14 rounded-2xl bg-white border border-white/80 flex items-center justify-center text-2xl shadow-sm group-hover:scale-110 group-hover:rotate-3 group-hover:shadow-md transition-all">
+                                                                📝
+                                                            </div>
+                                                            <div className="flex gap-2 transition-opacity">
+                                                                <button
+                                                                    onClick={(e) => startEdit(e, l)}
+                                                                    className="p-2 bg-white/50 hover:bg-white text-blue-600 rounded-xl hover:shadow-md transition-all"
+                                                                    title="Sửa"
+                                                                >
+                                                                    ✏️
+                                                                </button>
+                                                                <button
+                                                                    onClick={(e) => handleDelete(e, l.id)}
+                                                                    className="p-2 bg-white/50 hover:bg-white text-red-500 rounded-xl hover:shadow-md transition-all"
+                                                                    title="Xóa"
+                                                                >
+                                                                    🗑️
+                                                                </button>
+                                                            </div>
+                                                        </div>
 
-                                            <h3 className="font-bold text-xl md:text-2xl text-slate-800 mb-2 line-clamp-2 leading-tight group-hover:text-indigo-700 transition-colors">{l.title}</h3>
-                                            <div className="mt-auto pt-6 flex items-center gap-2 text-slate-400 text-xs md:text-sm font-bold group-hover:text-indigo-600 transition-colors uppercase tracking-wider">
-                                                <span>Bắt đầu ngay</span>
-                                                <span className="group-hover:translate-x-2 transition-transform">➜</span>
-                                            </div>
+                                                        <h3 className="font-bold text-xl md:text-2xl text-slate-800 mb-2 line-clamp-2 leading-tight group-hover:text-indigo-700 transition-colors">{l.title}</h3>
+                                                        <div className="mt-auto pt-6 flex items-center gap-2 text-slate-400 text-xs md:text-sm font-bold group-hover:text-indigo-600 transition-colors uppercase tracking-wider">
+                                                            <span>Bắt đầu học</span>
+                                                            <span className="group-hover:translate-x-2 transition-transform">➜</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
                                         </div>
                                     </div>
-                                ))}
-                            </div>
+                                )}
+
+                                {/* TRANSFORMATION LESSONS SECTION */}
+                                {/* TRANSFORMATION LESSONS SECTION */}
+                                <div className="px-2 pt-8 border-t border-slate-200/60">
+                                    <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-3">
+                                        <span className="bg-pink-100 text-pink-600 p-2 rounded-xl text-xl">🪄</span>
+                                        Luyện Biến Đổi Câu
+                                        <span className="text-sm font-normal text-slate-400 ml-2 bg-slate-100 px-3 py-1 rounded-full">{transformationLessons.length}</span>
+                                    </h2>
+
+                                    {transformationLessons.length === 0 ? (
+                                        <div className="flex flex-col items-center justify-center p-12 text-center bg-slate-50/50 rounded-3xl border border-dashed border-slate-200">
+                                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-3xl mb-4 text-slate-400 grayscale opacity-50">🪄</div>
+                                            <p className="text-slate-500 font-medium text-lg">Chưa có bài tập biến đổi câu nào</p>
+                                            <p className="text-slate-400 text-sm mt-1">Các bài học có cấu trúc "Biến đổi câu" sẽ xuất hiện ở đây.</p>
+                                        </div>
+                                    ) : (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8">
+                                            {transformationLessons.map(l => (
+                                                <div key={l.id} onClick={() => selectLesson(l)} className="glass-panel p-6 md:p-8 rounded-4xl shadow-sm hover:shadow-[0_20px_60px_rgba(236,72,153,0.25)] hover:-translate-y-2 hover:border-pink-300 transition-all duration-500 cursor-pointer relative overflow-hidden group bg-white/40">
+                                                    <div className="absolute top-0 right-0 w-32 h-32 bg-linear-to-br from-pink-500/10 to-transparent rounded-full blur-2xl group-hover:bg-pink-500/20 transition-colors duration-500"></div>
+
+                                                    <div className="relative z-10 flex flex-col h-full">
+                                                        <div className="flex justify-between items-start mb-6">
+                                                            <div className="w-14 h-14 rounded-2xl bg-pink-50 border border-white/80 flex items-center justify-center text-2xl shadow-sm group-hover:scale-110 group-hover:-rotate-3 group-hover:shadow-md transition-all text-pink-500">
+                                                                ⚡
+                                                            </div>
+                                                            <div className="flex gap-2 transition-opacity">
+                                                                <button
+                                                                    onClick={(e) => handleDelete(e, l.id)}
+                                                                    className="p-2 bg-white/50 hover:bg-white text-red-500 rounded-xl hover:shadow-md transition-all"
+                                                                    title="Xóa"
+                                                                >
+                                                                    🗑️
+                                                                </button>
+                                                            </div>
+                                                        </div>
+
+                                                        <h3 className="font-bold text-xl md:text-2xl text-slate-800 mb-2 line-clamp-2 leading-tight group-hover:text-pink-600 transition-colors">{l.title}</h3>
+                                                        <div className="mt-auto pt-6 flex items-center gap-2 text-slate-400 text-xs md:text-sm font-bold group-hover:text-pink-600 transition-colors uppercase tracking-wider">
+                                                            <span>Luyện ngay</span>
+                                                            <span className="group-hover:translate-x-2 transition-transform">➜</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </>
                         )}
                     </div>
                 </div>
             )}
-
             {view === 'CREATE' && (
                 <div className="max-w-3xl mx-auto p-12 relative z-10 animate-slide-up">
                     <h2 className="text-3xl font-bold mb-8 text-slate-900">{isEditing ? 'Chỉnh sửa bài học' : 'Soạn bài mới'}</h2>
+
+
+                    {/* Mode Toggle */}
+                    {!isEditing && (
+                        <div className="flex gap-4 mb-6 bg-slate-100 p-1.5 rounded-xl">
+                            <button onClick={() => setInputMode('TEXT')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${inputMode === 'TEXT' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}>
+                                📝 Văn bản thường
+                            </button>
+                            <button onClick={() => setInputMode('STRUCTURED')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${inputMode === 'STRUCTURED' ? 'bg-white shadow text-pink-600' : 'text-slate-500 hover:text-slate-700'}`}>
+                                🪄 Biến đổi câu (Game)
+                            </button>
+                        </div>
+                    )}
+
                     <div className="space-y-6">
-                        <input className="w-full p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-medium" placeholder="Tiêu đề..." value={newTitle} onChange={e => setNewTitle(e.target.value)} disabled={isLoading} />
-                        <textarea className="w-full h-80 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-mono text-sm leading-relaxed" placeholder="Nội dung..." value={newText} onChange={e => setNewText(e.target.value)} disabled={isLoading} />
+                        <input className="w-full p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-medium text-lg" placeholder="Tiêu đề bài học..." value={newTitle} onChange={e => setNewTitle(e.target.value)} disabled={isLoading} />
+
+                        {inputMode === 'TEXT' ? (
+                            <textarea className="w-full h-80 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-mono text-sm leading-relaxed" placeholder="Nhập nội dung văn bản ở đây..." value={newText} onChange={e => setNewText(e.target.value)} disabled={isLoading} />
+                        ) : (
+                            <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1 custom-scrollbar">
+                                {structuredRows.map((row, i) => (
+                                    <div key={i} className="bg-white p-6 rounded-2xl shadow-sm border border-pink-100 relative group transition-all hover:shadow-md">
+                                        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onClick={() => removeRow(i)} className="text-red-400 hover:text-red-600 font-bold p-1">🗑️</button>
+                                        </div>
+                                        <div className="grid gap-4">
+                                            <div>
+                                                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Ngữ cảnh (Context/Question)</label>
+                                                <input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-pink-500 transition font-medium"
+                                                    placeholder="e.g. My computer doesn't work, so I can't e-mail you."
+                                                    value={row.context} onChange={e => updateRow(i, 'context', e.target.value)} />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Từ gợi ý (Keyword/Prompt)</label>
+                                                    <input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-pink-500 transition font-bold text-pink-600"
+                                                        placeholder="e.g. WRONG"
+                                                        value={row.prompt} onChange={e => updateRow(i, 'prompt', e.target.value)} />
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Đáp án (Target Sentence)</label>
+                                                    <input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-green-500 transition font-medium text-slate-800"
+                                                        placeholder="e.g. There's something wrong with my computer..."
+                                                        value={row.answer} onChange={e => updateRow(i, 'answer', e.target.value)} />
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 flex justify-between">
+                                                    <span>Từ gây nhiễu (Distractors)</span>
+                                                    <button onClick={() => handleGenerateDistractors(i)} className="text-xs bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded hover:bg-indigo-200 transition">
+                                                        ✨ AI Suggest
+                                                    </button>
+                                                </label>
+                                                <input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition text-sm"
+                                                    placeholder="e.g. problem, error, bad (phân cách dấu phẩy)"
+                                                    value={row.distractors} onChange={e => updateRow(i, 'distractors', e.target.value)} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                                <button onClick={addRow} className="w-full py-4 border-2 border-dashed border-slate-300 rounded-2xl text-slate-400 font-bold hover:border-pink-400 hover:text-pink-500 hover:bg-pink-50 transition-all">
+                                    + Thêm câu hỏi
+                                </button>
+                            </div>
+                        )}
                         <div className="flex gap-4 pt-4">
                             <button onClick={resetCreate} className="flex-1 py-4 rounded-2xl font-bold text-slate-500 hover:bg-slate-100" disabled={isLoading}>Hủy</button>
                             <button onClick={handleCreateOrUpdate} disabled={isLoading} className={`flex-1 py-4 text-white rounded-2xl font-bold shadow-xl transition-all ${isLoading ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
@@ -705,7 +906,47 @@ export default function RealDataApp() {
                 </div>
             )}
 
-            {view === 'DETAIL' && selectedLesson && (
+            {view === 'DETAIL' && selectedLesson && (selectedLesson.type === 'TRANSFORMATION' ? (
+                /* TRANSFORMATION START SCREEN */
+                <div className="h-screen flex items-center justify-center relative z-10 animate-fade-in p-6">
+                    <button onClick={() => setView('DASHBOARD')} className="absolute top-8 left-8 text-slate-400 hover:text-slate-700 font-bold transition flex items-center gap-2 bg-white/50 px-4 py-2 rounded-xl backdrop-blur-sm">← Quay lại</button>
+
+                    <div className="glass-panel p-12 rounded-[3rem] shadow-2xl max-w-2xl w-full text-center relative overflow-hidden bg-white/80">
+                        <div className="absolute top-0 left-0 w-full h-2 bg-linear-to-r from-pink-400 to-purple-500"></div>
+                        <div className="mb-8">
+                            <div className="w-24 h-24 mx-auto bg-pink-100 rounded-full flex items-center justify-center text-5xl mb-6 shadow-sm text-pink-500 animate-bounce-in">🪄</div>
+                            <h2 className="text-4xl font-extrabold text-slate-800 mb-2">{selectedLesson.title}</h2>
+                            <p className="text-slate-500 font-medium">Bài tập biến đổi câu: {lessonData.length} câu hỏi</p>
+                        </div>
+
+                        {/* Mode Selection */}
+                        <div className="space-y-4">
+                            <p className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Chọn cơ chế luyện tập</p>
+
+                            {/* Reorder Mode */}
+                            <button
+                                onClick={() => { setTransformationSubMode('REORDER'); setView('MODE_TRANSFORMATION'); }}
+                                className="w-full py-5 bg-linear-to-r from-indigo-500 to-purple-600 text-white rounded-2xl font-bold text-xl shadow-xl shadow-indigo-200 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 group"
+                            >
+                                <span className="text-2xl">🧩</span>
+                                <span>Xếp từ</span>
+                                <span className="group-hover:translate-x-1 transition-transform">→</span>
+                            </button>
+
+                            {/* Handwriting Mode */}
+                            <button
+                                onClick={() => { setTransformationSubMode('HANDWRITING'); setView('MODE_TRANSFORMATION'); }}
+                                className="w-full py-5 bg-linear-to-r from-teal-500 to-emerald-600 text-white rounded-2xl font-bold text-xl shadow-xl shadow-teal-200 hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-3 group"
+                            >
+                                <span className="text-2xl">✍️</span>
+                                <span>Viết tay</span>
+                                <span className="group-hover:translate-x-1 transition-transform">→</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : (
+                /* STANDARD MENU */
                 <div className="h-screen overflow-y-auto flex flex-col p-6 relative z-10 animate-fade-in custom-scrollbar">
                     <button onClick={() => setView('DASHBOARD')} className="absolute top-8 left-8 text-slate-400 hover:text-slate-700 font-bold transition flex items-center gap-2">← Quay lại</button>
                     <div className="text-center mb-16 max-w-2xl mx-auto mt-12">
@@ -808,7 +1049,8 @@ export default function RealDataApp() {
                         </div>
                     </div>
                 </div>
-            )}
+            ))}
+
 
             {view === 'MODE_READ' && <ReadMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_LISTEN' && <ListenMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
@@ -820,6 +1062,7 @@ export default function RealDataApp() {
             {view === 'MODE_PARA_REORDER' && <ParagraphReorderMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_ERROR_HUNT' && <ErrorHuntMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
             {view === 'MODE_DEEP_FOCUS' && <DeepFocusMode sentences={lessonData} onBack={() => setView('DETAIL')} />}
-        </div >
+            {view === 'MODE_TRANSFORMATION' && <TransformationMode sentences={lessonData} onBack={() => setView('DETAIL')} mode={transformationSubMode} />}
+        </div>
     );
 }

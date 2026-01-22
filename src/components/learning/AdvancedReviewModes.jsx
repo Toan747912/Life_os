@@ -73,7 +73,7 @@ export const ClozeParagraphMode = ({ sentences, onBack }) => {
 
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-6 md:p-12 max-w-4xl mx-auto w-full">
-                <div className="bg-white p-8 md:p-12 rounded-[2rem] shadow-xl border border-slate-100 leading-loose text-lg md:text-xl text-slate-800 text-justify">
+                <div className="bg-white p-8 md:p-12 rounded-4xl shadow-xl border border-slate-100 leading-loose text-lg md:text-xl text-slate-800 text-justify">
                     {tokens.map((token, i) => {
                         if (!token.isHidden) return <span key={i} className="mr-1.5">{token.original}</span>;
 
