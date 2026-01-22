@@ -3,10 +3,24 @@ require('dotenv').config();
 const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
+// Tăng giới hạn của body-parser để nhận ảnh base64
+app.use(bodyParser.json({ limit: '10mb' }));
+
+// --- CẤU HÌNH GEMINI ---
+// Khởi tạo Gemini client. API key phải được đặt trong file .env
+let genAI;
+let visionModel;
+if (process.env.GEMINI_API_KEY) {
+    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    visionModel = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+    console.log("✅ Gemini AI Initialized Successfully.");
+} else {
+    console.warn("⚠️  Warning: GEMINI_API_KEY not found in .env file. Gemini features will be disabled.");
+}
 
 // CẤU HÌNH KẾT NỐI DATABASE
 const pool = new Pool(
@@ -105,7 +119,6 @@ app.get('/api/lessons/:id', async (req, res) => {
     }
 });
 
-// API 3: Thêm bài học mới (Updated Logic)
 // API 3: Thêm bài học mới (Updated Logic)
 app.post('/api/lessons', async (req, res) => {
     const { title, text } = req.body;
@@ -353,6 +366,45 @@ app.post('/api/study/save-progress', async (req, res) => {
         res.status(500).json(err);
     }
 });
+
+// --- NEW GEMINI API ---
+app.post('/api/recognize-handwriting', async (req, res) => {
+    if (!visionModel) {
+        return res.status(503).json({ error: "Gemini AI not initialized. Check server logs for API key issues." });
+    }
+
+    try {
+        const { image } = req.body;
+        if (!image) {
+            return res.status(400).json({ error: "No image data provided." });
+        }
+
+        // Gemini cần data ảnh dạng base64 thuần, không có tiền tố data:image/...
+        const imagePart = {
+            inlineData: {
+                data: image.replace(/^data:image\/(png|jpeg);base64,/, ""),
+                mimeType: "image/png"
+            }
+        };
+
+        const prompt = "Transcribe the handwritten text in this image. Be as accurate as possible. Only return the transcribed text.";
+
+        const result = await visionModel.generateContent([prompt, imagePart]);
+        const response = await result.response;
+        const text = response.text();
+
+        console.log("[POST /api/recognize-handwriting] Recognized Text:", text);
+        res.json({ text });
+
+    } catch (error) {
+        console.error("[POST /api/recognize-handwriting] ERROR DETAILS:", error);
+        res.status(500).json({
+            error: "Failed to recognize handwriting with Gemini AI.",
+            details: error.message || error.toString()
+        });
+    }
+});
+
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {

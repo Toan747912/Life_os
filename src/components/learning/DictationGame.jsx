@@ -61,7 +61,7 @@ export const DictationGame = ({ sentence, onSuccess }) => {
             
             <h3 className="mb-4 font-bold text-gray-700">✍️ Viết lại từ bạn vừa nghe:</h3>
 
-            <HandwritingPad onRecognized={handleAIResult} />
+            <HandwritingPad onRecognized={handleAIResult} expectedAnswer={sentence.content} />
 
             <div className="mt-4 p-4 bg-gray-100 rounded-lg w-full text-center">
                 <p className="text-xs text-gray-500">Hệ thống nhận diện là:</p>
