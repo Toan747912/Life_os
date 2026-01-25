@@ -1,5 +1,6 @@
 const express = require('express');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -64,8 +65,20 @@ const pool = new Pool(
             CREATE TABLE IF NOT EXISTS lessons (
                 id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
+                type TEXT DEFAULT 'STANDARD',
                 created_at TIMESTAMP DEFAULT NOW()
             )
+        `);
+
+        // Migration: Add type column if it doesn't exist
+        await client.query(`ALTER TABLE lessons ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'STANDARD'`);
+
+        // Migration: Backfill type for legacy data where it might be inaccurate
+        await client.query(`
+            UPDATE lessons l
+            SET type = 'TRANSFORMATION'
+            WHERE type = 'STANDARD' 
+            AND EXISTS (SELECT 1 FROM sentences s WHERE s.lesson_id = l.id AND s.prompt IS NOT NULL AND s.prompt != '')
         `);
 
         // 2. Ensure 'sentences' table and columns exist
@@ -176,13 +189,8 @@ function calculateTimeLimit(wordCount, level) {
 app.get('/api/lessons', async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT l.*, 
-                CASE WHEN EXISTS (SELECT 1 FROM sentences s WHERE s.lesson_id = l.id AND s.prompt IS NOT NULL) 
-                        THEN 'TRANSFORMATION' 
-                        ELSE 'STANDARD' 
-                END as type
-            FROM lessons l 
-            ORDER BY l.id DESC
+            SELECT * FROM lessons 
+            ORDER BY id DESC
         `);
         console.log(`[GET /api/lessons] Found ${result.rows.length} lessons`);
         res.json(result.rows);
@@ -202,7 +210,28 @@ app.get('/api/lessons/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('SELECT * FROM sentences WHERE lesson_id = $1 ORDER BY "order" ASC', [id]);
-        res.json(result.rows);
+
+        // Ensure distractors are parsed if they are JSON strings or Postgres arrays
+        const rows = result.rows.map(row => {
+            if (row.distractors && typeof row.distractors === 'string') {
+                try {
+                    if (row.distractors.startsWith('{')) {
+                        // Handle Postgres array format fallback if repair script missed something
+                        row.distractors = row.distractors.substring(1, row.distractors.length - 1)
+                            .split(',')
+                            .map(s => s.trim().replace(/^"|"$/g, ''));
+                    } else {
+                        row.distractors = JSON.parse(row.distractors);
+                    }
+                } catch (e) {
+                    console.error(`Failed to parse distractors for sentence ${row.id}:`, e.message);
+                    row.distractors = [];
+                }
+            }
+            return row;
+        });
+
+        res.json(rows);
     } catch (err) {
         console.error(err);
         res.status(500).json(err);
@@ -219,7 +248,7 @@ app.post('/api/lessons', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const lessonRes = await client.query('INSERT INTO lessons(title) VALUES($1) RETURNING id', [title]);
+        const lessonRes = await client.query('INSERT INTO lessons(title, type) VALUES($1, $2) RETURNING id', [title, 'STANDARD']);
         const lessonId = lessonRes.rows[0].id;
 
         for (let i = 0; i < sentencesToProcess.length; i++) {
@@ -258,7 +287,8 @@ app.post('/api/structured-lesson', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const lessonRes = await client.query('INSERT INTO lessons(title) VALUES($1) RETURNING id', [title]);
+        const type = req.body.type || 'TRANSFORMATION';
+        const lessonRes = await client.query('INSERT INTO lessons(title, type) VALUES($1, $2) RETURNING id', [title, type]);
         const lessonId = lessonRes.rows[0].id;
 
         for (let i = 0; i < sentences.length; i++) {
