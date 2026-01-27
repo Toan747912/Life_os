@@ -1,0 +1,4 @@
+{
+  "message": "column \"description\" of relation \"goals\" does not exist",
+  "code": "42703"
+}

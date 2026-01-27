@@ -3,6 +3,9 @@ import { ClozeParagraphMode, ParagraphReorderMode, ErrorHuntMode } from './learn
 import { DeepFocusMode } from './learning/DeepFocusMode';
 import { MatchingGame } from './learning/MatchingGame';
 import { TransformationMode } from './learning/TransformationMode';
+import { SocraticReview } from './SocraticReview';
+import { RelatedPosts } from './RelatedPosts';
+import { GraphView } from './GraphView';
 import SettingsModal from './SettingsModal';
 
 // =======================
@@ -393,7 +396,18 @@ export default function RealDataApp() {
             } else {
                 const method = isEditing ? 'PUT' : 'POST';
                 const url = isEditing ? `${API_URL}/lessons/${currentLessonId}` : `${API_URL}/lessons`;
-                await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTitle, text: newText }) });
+                const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTitle, text: newText }) });
+                const data = await res.json();
+
+                // Auto-Tagging (The Librarian)
+                if (data.success && data.lessonId) {
+                    // Call extraction in background
+                    fetch(`${API_URL}/ai/extract`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: newText, lessonId: data.lessonId })
+                    }).catch(console.error);
+                }
             }
             setView('DASHBOARD'); resetCreate(); fetchLessons();
         } catch (error) { alert("Lỗi: " + error.message); } finally { setIsLoading(false); }
@@ -462,6 +476,7 @@ export default function RealDataApp() {
                         </div>
                         <div className="flex gap-3">
                             <button onClick={() => setIsSettingsOpen(true)} className="bg-slate-100 hover:bg-slate-200 p-4 rounded-2xl shadow-md transition-all">⚙️</button>
+                            <button onClick={() => setView('GRAPH')} className="bg-indigo-100 text-indigo-700 px-6 py-4 rounded-2xl font-bold hover:bg-indigo-200 transition-all shadow-sm">🧠 Brain Map</button>
                             <button onClick={() => { setIsEditing(false); resetCreate(); setView('CREATE'); }} className="bg-slate-900 text-white px-8 py-4 rounded-2xl font-bold shadow-xl hover:scale-105 transition-all text-lg">+ Bài học mới</button>
                         </div>
                     </header>
@@ -552,43 +567,70 @@ export default function RealDataApp() {
                     )}
                     <div className="space-y-6">
                         <input className="w-full p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-medium text-lg" placeholder="Tiêu đề bài học..." value={newTitle} onChange={e => setNewTitle(e.target.value)} />
-                        {inputMode === 'TEXT' ? (
-                            <textarea className="w-full h-80 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-mono text-sm leading-relaxed" placeholder="Nhập nội dung văn bản..." value={newText} onChange={e => setNewText(e.target.value)} />
-                        ) : (
-                            <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1 custom-scrollbar">
-                                {structuredRows.map((row, i) => (
-                                    <div key={i} className={`bg-white p-6 rounded-2xl shadow-sm border relative group transition-all hover:shadow-md ${inputMode === 'MATCHING' ? 'border-rose-100' : 'border-pink-100'}`}>
-                                        <button onClick={() => removeRow(i)} className="absolute top-4 right-4 text-red-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">🗑️</button>
-                                        <div className="grid gap-4">
-                                            {inputMode === 'MATCHING' ? (
-                                                <div className="grid grid-cols-2 gap-4">
-                                                    <div><label className="text-[10px] font-bold text-slate-400 uppercase">Vế A (Trái)</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.context} onChange={e => updateRow(i, 'context', e.target.value)} /></div>
-                                                    <div><label className="text-[10px] font-bold text-slate-400 uppercase">Vế B (Phải)</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.answer} onChange={e => updateRow(i, 'answer', e.target.value)} /></div>
+
+                        <div className="flex flex-col lg:flex-row gap-8 items-start">
+                            <div className="flex-1 space-y-6 w-full">
+                                {inputMode === 'TEXT' ? (
+                                    <>
+                                        <textarea className="w-full h-80 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500 transition font-mono text-sm leading-relaxed" placeholder="Nhập nội dung văn bản..." value={newText} onChange={e => setNewText(e.target.value)} />
+                                        <SocraticReview content={newText} apiUrl={API_URL} />
+                                    </>
+                                ) : (
+                                    <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1 custom-scrollbar">
+                                        {structuredRows.map((row, i) => (
+                                            <div key={i} className={`bg-white p-6 rounded-2xl shadow-sm border relative group transition-all hover:shadow-md ${inputMode === 'MATCHING' ? 'border-rose-100' : 'border-pink-100'}`}>
+                                                <button onClick={() => removeRow(i)} className="absolute top-4 right-4 text-red-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">🗑️</button>
+                                                <div className="grid gap-4">
+                                                    {inputMode === 'MATCHING' ? (
+                                                        <div className="grid grid-cols-2 gap-4">
+                                                            <div><label className="text-[10px] font-bold text-slate-400 uppercase">Vế A (Trái)</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.context} onChange={e => updateRow(i, 'context', e.target.value)} /></div>
+                                                            <div><label className="text-[10px] font-bold text-slate-400 uppercase">Vế B (Phải)</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.answer} onChange={e => updateRow(i, 'answer', e.target.value)} /></div>
+                                                        </div>
+                                                    ) : (
+                                                        <>
+                                                            <div><label className="text-[10px] font-bold text-slate-400 uppercase">Ngữ cảnh</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.context} onChange={e => updateRow(i, 'context', e.target.value)} /></div>
+                                                            <div className="grid grid-cols-2 gap-4">
+                                                                <div><label className="text-[10px] font-bold text-slate-400 uppercase">Gợi ý</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.prompt} onChange={e => updateRow(i, 'prompt', e.target.value)} /></div>
+                                                                <div><label className="text-[10px] font-bold text-slate-400 uppercase">Đáp án</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.answer} onChange={e => updateRow(i, 'answer', e.target.value)} /></div>
+                                                            </div>
+                                                            <div>
+                                                                <div className="flex justify-between mb-1"><label className="text-[10px] font-bold text-slate-400 uppercase">Từ gây nhiễu</label><button onClick={() => handleGenerateDistractors(i)} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 rounded">✨ AI Suggest</button></div>
+                                                                <input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.distractors} onChange={e => updateRow(i, 'distractors', e.target.value)} />
+                                                            </div>
+                                                        </>
+                                                    )}
                                                 </div>
-                                            ) : (
-                                                <>
-                                                    <div><label className="text-[10px] font-bold text-slate-400 uppercase">Ngữ cảnh</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.context} onChange={e => updateRow(i, 'context', e.target.value)} /></div>
-                                                    <div className="grid grid-cols-2 gap-4">
-                                                        <div><label className="text-[10px] font-bold text-slate-400 uppercase">Gợi ý</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.prompt} onChange={e => updateRow(i, 'prompt', e.target.value)} /></div>
-                                                        <div><label className="text-[10px] font-bold text-slate-400 uppercase">Đáp án</label><input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.answer} onChange={e => updateRow(i, 'answer', e.target.value)} /></div>
-                                                    </div>
-                                                    <div>
-                                                        <div className="flex justify-between mb-1"><label className="text-[10px] font-bold text-slate-400 uppercase">Từ gây nhiễu</label><button onClick={() => handleGenerateDistractors(i)} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 rounded">✨ AI Suggest</button></div>
-                                                        <input className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" value={row.distractors} onChange={e => updateRow(i, 'distractors', e.target.value)} />
-                                                    </div>
-                                                </>
-                                            )}
-                                        </div>
+                                            </div>
+                                        ))}
+                                        <button onClick={addRow} className={`w-full py-4 border-2 border-dashed rounded-2xl font-bold transition-all ${inputMode === 'MATCHING' ? 'border-rose-200 text-rose-400 hover:bg-rose-50' : 'border-pink-200 text-pink-400 hover:bg-pink-50'}`}>+ Thêm mục mới</button>
                                     </div>
-                                ))}
-                                <button onClick={addRow} className={`w-full py-4 border-2 border-dashed rounded-2xl font-bold transition-all ${inputMode === 'MATCHING' ? 'border-rose-200 text-rose-400 hover:bg-rose-50' : 'border-pink-200 text-pink-400 hover:bg-pink-50'}`}>+ Thêm mục mới</button>
+                                )}
+                                <div className="flex gap-4 pt-4">
+                                    <button onClick={resetCreate} className="flex-1 py-4 font-bold text-slate-500">Hủy</button>
+                                    <button onClick={handleCreateOrUpdate} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl">Lưu bài học</button>
+                                </div>
                             </div>
-                        )}
-                        <div className="flex gap-4 pt-4">
-                            <button onClick={resetCreate} className="flex-1 py-4 font-bold text-slate-500">Hủy</button>
-                            <button onClick={handleCreateOrUpdate} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-xl">Lưu bài học</button>
                         </div>
+
+                        {/* Right Sidebar for Related Posts */}
+                        <RelatedPosts
+                            content={inputMode === 'TEXT' ? newText : structuredRows.map(r => r.answer).join(" ")}
+                            apiUrl={API_URL}
+                            onSelect={(lesson) => {
+                                if (window.confirm(`Switch to related lesson "${lesson.title}"? Unsaved changes will be lost.`)) {
+                                    selectLesson({ id: lesson.id });
+                                }
+                            }}
+                        />
                     </div>
+                </div>
+            )}
+
+            {view === 'GRAPH' && (
+                <div className="w-full max-w-7xl mx-auto p-8 animate-fade-in flex flex-col h-screen">
+                    <button onClick={() => setView('DASHBOARD')} className="font-bold text-slate-400 hover:text-slate-600 mb-4 self-start">← Back to Dashboard</button>
+                    <h2 className="text-3xl font-black mb-6 text-indigo-900">🧠 Knowledge Graph (The Brain)</h2>
+                    <GraphView apiUrl={API_URL} onNodeClick={(node) => selectLesson({ id: Number(node.id) })} />
                 </div>
             )}
 

@@ -1,57 +1,32 @@
 const express = require('express');
 const path = require('path');
+const { generateEmbedding, generateText, reviewPostSocratic } = require('./services/aiService');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const Groq = require('groq-sdk');
-
+// --- CONFIGURATION ---
 const app = express();
 app.use(cors());
 // Tăng giới hạn của body-parser để nhận ảnh base64
 app.use(bodyParser.json({ limit: '10mb' }));
 
 // --- CẤU HÌNH AI PROVIDERS ---
-// Priority: Groq (free tier 14,400 req/day) → Gemini (free tier 20 req/day)
-let groqClient;
-let genAI;
-let visionModel;
-
-// Initialize Groq
-if (process.env.GROQ_API_KEY) {
-    groqClient = new Groq({ apiKey: process.env.GROQ_API_KEY });
-    console.log("✅ Groq AI Initialized Successfully (Primary Provider).");
-} else {
-    console.warn("⚠️  Warning: GROQ_API_KEY not found in .env file. Falling back to Gemini.");
-}
-
-// Initialize Gemini (as fallback)
-if (process.env.GEMINI_API_KEY) {
-    genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    visionModel = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-    console.log(groqClient ? "✅ Gemini AI Initialized (Fallback Provider)." : "✅ Gemini AI Initialized Successfully.");
-} else {
-    console.warn("⚠️  Warning: GEMINI_API_KEY not found in .env file. Gemini features will be disabled.");
-}
-
-if (!groqClient && !genAI) {
-    console.error("❌ ERROR: No AI providers configured! Please add GROQ_API_KEY or GEMINI_API_KEY to .env");
-}
+// logic moved to services/aiService.js
 
 // CẤU HÌNH KẾT NỐI DATABASE
 const pool = new Pool(
     process.env.DATABASE_URL
         ? {
             connectionString: process.env.DATABASE_URL,
-            ssl: { rejectUnauthorized: false } // Bắt buộc cho Supabase/Render
+            ssl: { rejectUnauthorized: false }
         }
         : {
-            user: 'postgres',
-            host: 'localhost',
-            database: 'life_os',
-            password: 'ngoquoctoan1234',
-            port: 5432,
+            user: process.env.DB_USER,
+            host: process.env.DB_HOST,
+            database: process.env.DB_NAME,
+            password: process.env.DB_PASSWORD,
+            port: process.env.DB_PORT,
         }
 );
 
@@ -59,29 +34,123 @@ const pool = new Pool(
 (async () => {
     try {
         const client = await pool.connect();
+        let hasVector = false;
 
-        // 1. Ensure 'lessons' table exists (basic)
+        // 1. Ensure 'vector' extension exists (CRITICAL for Life OS)
+        try {
+            await client.query('CREATE EXTENSION IF NOT EXISTS vector');
+            hasVector = true;
+            console.log("✅ DB Migration: 'vector' extension verified.");
+        } catch (e) {
+            console.warn("⚠️  DB Migration Warning: Failed to enable 'vector' extension. Falling back to JSONB storage for vectors.");
+        }
+
+        const vectorType = hasVector ? 'vector(768)' : 'JSONB';
+
+        // 2. Life OS Tables
+        // 2.1 Goals
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS goals (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                status VARCHAR(50) DEFAULT 'PLANNING', -- PLANNING, IN_PROGRESS, COMPLETED
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // 2.2 Resources
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS resources (
+                id SERIAL PRIMARY KEY,
+                goal_id INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                url TEXT,
+                type VARCHAR(50), -- ARTICLE, VIDEO, BOOK
+                status VARCHAR(50) DEFAULT 'NEW', -- NEW, DIGESTING, MASTERED
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Update resources table to include content column
+        await client.query(`ALTER TABLE resources ADD COLUMN IF NOT EXISTS content TEXT`);
+        // Ensure type column exists
+        await client.query(`ALTER TABLE resources ADD COLUMN IF NOT EXISTS type VARCHAR(50)`);
+        // Optional: Set default type
+        await client.query(`ALTER TABLE resources ALTER COLUMN type SET DEFAULT 'TEXT'`);
+
+        // 2.3 Posts (The Brain Nodes)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS posts (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT,
+                content_vector ${vectorType}, 
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // 2.4 Post_Resources (Link Input to Output)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS post_resources (
+                post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+                resource_id INTEGER REFERENCES resources(id) ON DELETE CASCADE,
+                PRIMARY KEY (post_id, resource_id)
+            )
+        `);
+
+        // 2.5 Post Links (Edges)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS post_links (
+                source_post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+                target_post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+                link_type VARCHAR(50), -- SUPPORTS, CONTRADICTS, RELATES_TO
+                PRIMARY KEY (source_post_id, target_post_id)
+            )
+        `);
+
+        // Ensure 'link_type' column exists (Migration Fix)
+        try {
+            await client.query(`ALTER TABLE post_links ADD COLUMN IF NOT EXISTS link_type VARCHAR(50)`);
+        } catch (e) {
+            console.warn("Migration: link_type column already exists or error", e.message);
+        }
+
+        // Ensure columns exist in 'posts' (Migration Fix)
+        const postColumns = [
+            { cmd: `ALTER TABLE posts ADD COLUMN IF NOT EXISTS goal_id INTEGER REFERENCES goals(id)` },
+            { cmd: `ALTER TABLE posts ADD COLUMN IF NOT EXISTS content TEXT` },
+            { cmd: `ALTER TABLE posts ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` },
+            { cmd: `ALTER TABLE posts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP` },
+            { cmd: `ALTER TABLE posts ADD COLUMN IF NOT EXISTS content_vector ${vectorType}` }
+        ];
+
+        for (const col of postColumns) {
+            try {
+                await client.query(col.cmd);
+            } catch (e) {
+                console.warn(`Migration Warning: Failed to run "${col.cmd}":`, e.message);
+            }
+        }
+
+        // 3. Learning App Tables (Legacy Support)
         await client.query(`
             CREATE TABLE IF NOT EXISTS lessons (
                 id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
                 type TEXT DEFAULT 'STANDARD',
-                created_at TIMESTAMP DEFAULT NOW()
+                created_at TIMESTAMP DEFAULT NOW(),
+                content_vector ${vectorType},
+                tags TEXT[],
+                concepts JSONB
             )
         `);
 
-        // Migration: Add type column if it doesn't exist
+        // ... [Existing Learning App Migrations] ...
         await client.query(`ALTER TABLE lessons ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'STANDARD'`);
 
-        // Migration: Backfill type for legacy data where it might be inaccurate
-        await client.query(`
-            UPDATE lessons l
-            SET type = 'TRANSFORMATION'
-            WHERE type = 'STANDARD' 
-            AND EXISTS (SELECT 1 FROM sentences s WHERE s.lesson_id = l.id AND s.prompt IS NOT NULL AND s.prompt != '')
-        `);
-
-        // 2. Ensure 'sentences' table and columns exist
+        // Ensure 'sentences' table
         await client.query(`
             CREATE TABLE IF NOT EXISTS sentences (
                 id SERIAL PRIMARY KEY,
@@ -94,18 +163,17 @@ const pool = new Pool(
             )
         `);
 
-        // Add missing columns to sentences
+        // Add columns to sentences
         const sentenceColumns = [
             { name: 'context', type: 'TEXT' },
             { name: 'prompt', type: 'TEXT' },
-            { name: 'distractors', type: 'TEXT' } // JSON stringified
+            { name: 'distractors', type: 'TEXT' }
         ];
-
         for (const col of sentenceColumns) {
             await client.query(`ALTER TABLE sentences ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`);
         }
 
-        // 3. Ensure 'user_progress' table exists
+        // Ensure 'user_progress'
         await client.query(`
             CREATE TABLE IF NOT EXISTS user_progress (
                 id SERIAL PRIMARY KEY,
@@ -122,7 +190,7 @@ const pool = new Pool(
         `);
 
         client.release();
-        console.log("✅ DB Migration: All tables and columns verified/updated.");
+        console.log(`✅ DB Migration: All tables verified. Vector Mode: ${hasVector ? 'ON' : 'OFF (JSON Mode)'}`);
     } catch (err) {
         console.error("❌ DB Migration Failed:", err);
     }
@@ -183,7 +251,201 @@ function calculateTimeLimit(wordCount, level) {
     return 60;
 }
 
-// --- APIS ---
+// --- LIFE OS APIS (GOALS, RESOURCES, POSTS) ---
+
+// 1. HEALTH CHECK
+app.get('/api/health', async (req, res) => {
+    try {
+        const client = await pool.connect();
+        const result = await client.query('SELECT NOW()');
+        client.release();
+        res.json({ status: 'ok', time: result.rows[0].now });
+    } catch (err) {
+        console.error('[Health Check] Failed:', err);
+        res.status(500).json({ status: 'error', error: err.message, details: err });
+    }
+});
+
+// 2. GOALS
+app.get('/api/goals', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM goals ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (err) {
+        console.error('[GET /api/goals] Database Error:', err); // Enhanced logging
+        res.status(500).json({ error: "Failed to fetch goals", details: err.message, fullError: err });
+    }
+});
+
+app.post('/api/goals', async (req, res) => {
+    try {
+        const { title, description } = req.body;
+        const result = await pool.query('INSERT INTO goals (title, description) VALUES ($1, $2) RETURNING *', [title, description]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('[POST /api/goals] Database Error:', err); // Enhanced logging
+        res.status(500).json({ error: "Failed to create goal", details: err.message, fullError: err });
+    }
+});
+
+// 2. RESOURCES
+app.get('/api/resources', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM resources ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (err) {
+        console.error('[GET /api/resources] Error:', err);
+        res.status(500).json({ error: err.message, details: err });
+    }
+});
+
+app.post('/api/resources', async (req, res) => {
+    try {
+        const { goal_id, title, url, type, content } = req.body;
+        const result = await pool.query(
+            'INSERT INTO resources (goal_id, title, url, type, content) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [goal_id, title, url, type || 'TEXT', content]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('[POST /api/resources] Error:', err);
+        res.status(500).json({ error: err.message, details: err });
+    }
+});
+
+// 3. POSTS (BRAIN NODES) with EMBEDDINGS
+app.get('/api/posts', async (req, res) => {
+    try {
+        const { goal_id } = req.query;
+        let query = 'SELECT id, title, content, created_at, updated_at FROM posts';
+        const params = [];
+
+        if (goal_id) {
+            query += ' WHERE goal_id = $1 ORDER BY created_at DESC';
+            params.push(goal_id);
+        } else {
+            query += ' ORDER BY created_at DESC';
+        }
+
+        const result = await pool.query(query, params);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('[GET /api/posts] Error:', err);
+        res.status(500).json({ error: err.message, details: err });
+    }
+});
+
+app.post('/api/posts', async (req, res) => {
+    try {
+        const { title, content, goal_id } = req.body;
+
+        let vector = null;
+        try {
+            // Generate embedding if content exists
+            if (content) {
+                vector = await generateEmbedding(content);
+            }
+        } catch (e) {
+            console.warn("⚠️ Failed to generate embedding for post:", e.message);
+        }
+
+        // Updated query to include goal_id
+        const columns = ['title', 'content'];
+        const values = [title, content];
+        const placeholders = ['$1', '$2'];
+
+        if (vector) {
+            columns.push('content_vector');
+            values.push(`[${vector}]`);
+            placeholders.push(`$${values.length}`);
+        }
+
+        if (goal_id) {
+            columns.push('goal_id');
+            values.push(goal_id); // Assuming goal_id is passed
+            placeholders.push(`$${values.length}`);
+        }
+
+        const query = `INSERT INTO posts (${columns.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING id, title`;
+
+        const result = await pool.query(query, values);
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error("[POST /api/posts] Create Post Error:", err);
+        res.status(500).json({ error: err.message, details: err });
+    }
+});
+
+// 4. SEMANTIC SEARCH
+app.post('/api/posts/similar', async (req, res) => {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: "No content provided" });
+
+    try {
+        const vector = await generateEmbedding(content);
+
+        // Check if pgvector is available by trying a test query or just fallback on error
+        // Actually, let's try the vector query first
+        try {
+            const query = `
+                SELECT id, title, content, created_at,
+                (content_vector <-> $1) as distance 
+                FROM posts
+                WHERE content_vector IS NOT NULL
+                ORDER BY distance ASC
+                LIMIT 5;
+            `;
+            const result = await pool.query(query, [`[${vector}]`]);
+            res.json(result.rows);
+        } catch (pgError) {
+            // Fallback: In-memory Cosine Similarity (If pgvector not installed)
+            console.warn("⚠️ pgvector query failed (likely missing extension). Falling back to JS search.", pgError.message);
+
+            const allPostsRes = await pool.query('SELECT id, title, content, content_vector FROM posts WHERE content_vector IS NOT NULL');
+            const allPosts = allPostsRes.rows;
+
+            // Compute distance manually
+            const similarPosts = allPosts.map(post => {
+                let dbVector = post.content_vector;
+                // If stored as JSONB, it might be an array already
+                if (typeof dbVector === 'string') dbVector = JSON.parse(dbVector);
+
+                // Simple Euclidean Distance
+                const dist = euclideanDistance(vector, dbVector);
+                return { ...post, distance: dist };
+            })
+                .sort((a, b) => a.distance - b.distance)
+                .slice(0, 5);
+
+            res.json(similarPosts);
+        }
+    } catch (err) {
+        console.error("Semantic Search Error:", err);
+        res.status(500).json({ error: "Search failed", details: err.message });
+    }
+});
+
+// 5. SOCRATIC REVIEW
+app.post('/api/posts/review', async (req, res) => {
+    const { content, resourceContext } = req.body;
+    try {
+        const feedback = await reviewPostSocratic(content, resourceContext);
+        res.json({ feedback });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+function euclideanDistance(a, b) {
+    if (!a || !b || a.length !== b.length) return 9999;
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) {
+        sum += (a[i] - b[i]) ** 2;
+    }
+    return Math.sqrt(sum);
+}
+
+// --- LEGACY APIS ---
 
 // API 1: Lấy danh sách bài học
 app.get('/api/lessons', async (req, res) => {
@@ -323,13 +585,9 @@ app.post('/api/structured-lesson', async (req, res) => {
 });
 
 // API 3.6: Generate Distractors (Groq/Gemini)
+// API 3.6: Generate Distractors (via aiService)
 app.post('/api/generate-distractors', async (req, res) => {
-    if (!groqClient && !genAI) {
-        return res.status(503).json({ error: "No AI providers available" });
-    }
-
     const { sentence, prompt } = req.body;
-
     try {
         const aiPrompt = `
             Task: Generate 5-6 single-word distractors for a sentence scrambling game.
@@ -338,65 +596,23 @@ app.post('/api/generate-distractors', async (req, res) => {
             
             Rules:
             1. The distractors should be grammatically plausible but incorrect in the context of the target sentence.
-            2. They should be related words (synonyms, antonyms, similar spelling, same semantic field).
+            2. They should be related words.
             3. Do NOT include words that are already in the target sentence.
             4. Return ONLY a JSON array of strings.
             
-            Example Output: ["bad", "mistake", "error", "problem", "fault"]
+            Example Output: ["bad", "mistake", "error"]
         `;
 
-        let text;
+        const text = await generateText(aiPrompt, true); // true = jsonMode hint
 
-        // Try Groq first
-        if (groqClient) {
-            try {
-                console.log("[POST /api/generate-distractors] Using Groq AI...");
-                const completion = await groqClient.chat.completions.create({
-                    messages: [{ role: "user", content: aiPrompt }],
-                    model: "llama-3.3-70b-versatile",
-                    temperature: 0.7,
-                    max_tokens: 200
-                });
-                text = completion.choices[0]?.message?.content || "";
-                console.log("[POST /api/generate-distractors] Groq Response:", text);
-            } catch (groqError) {
-                console.warn("[POST /api/generate-distractors] Groq failed, falling back to Gemini:", groqError.message);
-                if (genAI) {
-                    const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-                    const result = await model.generateContent(aiPrompt);
-                    const response = await result.response;
-                    text = response.text();
-                    console.log("[POST /api/generate-distractors] Gemini Response:", text);
-                } else {
-                    throw groqError;
-                }
-            }
-        } else if (genAI) {
-            // Use Gemini if Groq not available
-            console.log("[POST /api/generate-distractors] Using Gemini AI...");
-            const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-            const result = await model.generateContent(aiPrompt);
-            const response = await result.response;
-            text = response.text();
-            console.log("[POST /api/generate-distractors] Gemini Response:", text);
-        }
-
-        // Robust JSON extraction
         const jsonMatch = text.match(/\[[\s\S]*\]/);
-        if (!jsonMatch) {
-            throw new Error("No JSON array found in response");
-        }
+        if (!jsonMatch) throw new Error("No JSON array found");
 
         const distractors = JSON.parse(jsonMatch[0]);
-
         res.json({ distractors });
     } catch (error) {
         console.error("[POST /api/generate-distractors] ERROR:", error);
-        res.status(500).json({
-            error: "Failed to generate distractors",
-            details: error.message,
-            rawResponse: error.rawResponse
-        });
+        res.status(500).json({ error: "Failed to generate distractors" });
     }
 });
 
@@ -713,6 +929,213 @@ app.post('/api/recognize-handwriting', async (req, res) => {
     }
 });
 
+// --- AI & GRAPH APIS ---
+
+// (Removed redundant getEmbedding function in favor of aiService)
+
+// Helper for Text Generation (Handles Groq/Gemini fallback)
+// (Removed redundant generateText function in favor of aiService)
+
+// API 1: Socratic Review (The Challenger)
+// API 1: Socratic Review (via aiService)
+app.post('/api/ai/review', async (req, res) => {
+    try {
+        const { content } = req.body;
+        if (!content) return res.status(400).json({ error: "No content provided" });
+
+        const feedback = await socraticReview(content);
+        res.json({ feedback });
+    } catch (err) {
+        console.error("[Socratic Review] Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+
+// API 2: Knowledge Graph Node Extractor (The Librarian)
+app.post('/api/ai/extract', async (req, res) => {
+    const { content, lessonId } = req.body;
+    if (!content) return res.status(400).json({ error: "No content provided" });
+
+    const prompt = `
+        Bạn là một chuyên gia về Cấu trúc dữ liệu và Quản lý tri thức (Knowledge Management). Nhiệm vụ của bạn là phân tích văn bản và trích xuất các thành phần để xây dựng "Mạng lưới tri thức" (Knowledge Graph).
+
+        NHIỆM VỤ:
+        1. Đọc văn bản đầu vào.
+        2. Trích xuất 3-5 "Concept Nodes" (Khái niệm danh từ) quan trọng nhất. Đây phải là các thuật ngữ chuyên môn hoặc chủ thể chính.
+        3. Xác định "Mục đích chính" (Intent) của bài viết.
+        4. Đề xuất 3 Tags liên quan.
+
+        BẮT BUỘC TRẢ VỀ ĐỊNH DẠNG JSON:
+        {
+          "summary": "Tóm tắt nội dung bài viết trong 1 câu ngắn gọn.",
+          "core_concepts": ["Concept A", "Concept B", "Concept C"],
+          "content_type": "Tutorial | Definition | Opinion | Case Study",
+          "suggested_tags": ["tag1", "tag2", "tag3"]
+        }
+
+        User Message: "${content}"
+    `;
+
+    try {
+        const jsonStr = await generateText(prompt, 0.2, true);
+        const data = JSON.parse(jsonStr);
+
+        // Auto-save to DB if lessonId is provided
+        if (lessonId) {
+            const client = await pool.connect();
+            try {
+                await client.query(
+                    'UPDATE lessons SET tags = $1, concepts = $2 WHERE id = $3',
+                    [data.suggested_tags, JSON.stringify(data.core_concepts), lessonId]
+                );
+            } finally {
+                client.release();
+            }
+        }
+
+        res.json(data);
+    } catch (e) {
+        console.error("[POST /api/ai/extract] Error:", e);
+        res.status(500).json({ error: "Failed to extract concepts" });
+    }
+});
+
+// API 3: Related Posts + Synthesizer (Enhanced)
+app.post('/api/ai/related', async (req, res) => {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: "No content provided" });
+
+    try {
+        // 1. Generate Embedding for the draft
+        const vector = await getEmbedding(content);
+
+        // 2. Search in DB
+        const vectorStr = `[${vector.join(',')}]`;
+
+        const result = await pool.query(`
+            SELECT id, title, content, 
+            (content_vector <-> $1) as distance 
+            FROM lessons 
+            WHERE content_vector IS NOT NULL
+            ORDER BY distance ASC 
+            LIMIT 5
+        `, [vectorStr]);
+
+        res.json(result.rows);
+
+    } catch (e) {
+        console.error("[POST /api/ai/related] Error:", e);
+        res.json([]);
+    }
+});
+
+// API 4: The Synthesizer (Connect A and B)
+app.post('/api/ai/connect', async (req, res) => {
+    const { contentA, contentB, titleB } = req.body;
+
+    const prompt = `
+        Bạn là một Trợ lý Sáng tạo (Creative Partner) chuyên về việc kết nối các ý tưởng rời rạc (Connect the dots).
+
+        NGỮ CẢNH:
+        Người dùng đang viết một bài mới (A).
+        Hệ thống phát hiện một bài viết cũ (B) có liên quan.
+
+        NHIỆM VỤ:
+        Phân tích mối liên hệ tiềm năng giữa [A] và [B] để gợi ý cách kết hợp tạo Insight mới.
+
+        Các loại liên kết cần tìm:
+        - Hỗ trợ (Support): [B] có chứa bằng chứng củng cố cho [A] không?
+        - Mâu thuẫn (Contradict): [B] có góc nhìn nào phản bác lại [A] không?
+        - Mở rộng (Expand): [B] có phải là một ứng dụng thực tế của lý thuyết trong [A] không?
+
+        Định dạng trả về ngắn gọn, gợi mở (Markdown):
+        "💡 **Gợi ý kết nối:** Tôi thấy bạn đang viết về chủ đề này. Nó có liên quan thú vị đến bài **${titleB}**. 
+        Cụ thể: [Giải thích mối liên hệ].
+        👉 [Gợi ý 1 câu để user thêm vào bài viết]"
+
+        Content A: "${contentA}"
+        Content B: "${contentB}"
+    `;
+
+    try {
+        const response = await generateText(prompt, 0.7);
+        res.json({ insight: response });
+    } catch (e) {
+        console.error("[POST /api/ai/connect] Error:", e);
+        res.status(500).json({ error: "Failed to synthesize connection" });
+    }
+});
+
+
+// API: Graph Data (Nodes & Edges) - Enhanced with Concepts
+// API: Graph Data (Life OS Nodes & Edges)
+app.get('/api/graph/data', async (req, res) => {
+    try {
+        const nodes = [];
+        const edges = [];
+
+        // 1. Get Posts (Nodes)
+        const postsRes = await pool.query(`SELECT id, title, content, created_at FROM posts`);
+        postsRes.rows.forEach(row => {
+            nodes.push({
+                id: row.id.toString(),
+                type: 'default', // or custom node type
+                data: { label: row.title, type: 'post' },
+                position: { x: Math.random() * 800, y: Math.random() * 600 }
+            });
+        });
+
+        // 2. Get Post Links (Edges)
+        const linksRes = await pool.query(`SELECT source_post_id, target_post_id, link_type FROM post_links`);
+        linksRes.rows.forEach(row => {
+            edges.push({
+                id: `e${row.source_post_id}-${row.target_post_id}`,
+                source: row.source_post_id.toString(),
+                target: row.target_post_id.toString(),
+                animated: true,
+                label: row.link_type,
+                style: { stroke: '#cbd5e1' }
+            });
+        });
+
+        res.json({ nodes, edges });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json(e);
+    }
+});
+
+
+
+// 4. Lấy chi tiết một Goal cụ thể
+app.get('/api/goals/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await pool.query('SELECT * FROM goals WHERE id = $1', [id]);
+        if (result.rows.length === 0) return res.status(404).send('Goal not found');
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Server Error');
+    }
+});
+
+// 5. Lấy danh sách Resources của một Goal
+app.get('/api/goals/:id/resources', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const result = await pool.query(
+            'SELECT * FROM resources WHERE goal_id = $1 ORDER BY created_at DESC',
+            [id]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Server Error');
+    }
+});
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
