@@ -1,0 +1,134 @@
+// 1. Kết nối Database
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 2. Tạo Client để dùng trong Node.js
+generator client {
+  provider = "prisma-client-js"
+}
+
+// --- ENUMS (Định nghĩa các loại cố định để code sạch hơn) ---
+enum ResourceType {
+  PDF
+  YOUTUBE
+  TEXT
+  IMAGE
+  AUDIO
+  WEBSITE
+}
+
+enum ItemType {
+  VOCABULARY // Từ vựng
+  GRAMMAR    // Ngữ pháp
+  CONCEPT    // Khái niệm (Dùng cho môn khác như Tài chính/Code)
+}
+
+// --- MODELS (Bảng dữ liệu) ---
+
+model User {
+  id          String   @id @default(uuid()) // ID dạng chuỗi ngẫu nhiên
+  email       String   @unique
+  fullName    String?  @map("full_name")
+  
+  // Lưu cài đặt: { "theme": "dark", "daily_goal": 50, "target_level": "IELTS 7.0" }
+  preferences Json?    @default("{}") 
+  
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Quan hệ: Một User có nhiều Resource và nhiều Progress
+  resources   Resource[]
+  progress    UserProgress[]
+
+  tasks       Task[]
+
+  @@map("users") // Tên bảng trong DB là 'users' (số nhiều, chữ thường)
+}
+
+model Task {
+  id          String    @id @default(uuid())
+  title       String    // Ví dụ: "Ôn tập bài IELTS Reading"
+  description String?
+  status      String    @default("TODO") // TODO, IN_PROGRESS, DONE
+  dueDate     DateTime? // Ngày phải làm
+  priority    String    @default("MEDIUM") // HIGH, MEDIUM, LOW
+  
+  // Quan hệ với User
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+
+  // Quan hệ với Learning (Liên kết ngược lại Resource)
+  // Đây là điểm mấu chốt: Task này sinh ra từ tài liệu nào?
+  resourceId  String?
+  resource    Resource? @relation(fields: [resourceId], references: [id])
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Resource {
+  id          String       @id @default(uuid())
+  userId      String       @map("user_id")
+  
+  title       String
+  type        ResourceType @default(TEXT)
+  filePath    String?      @map("file_path") // URL trên Cloudinary/S3
+  
+  // Nội dung thô trích xuất từ file (để AI đọc lại mà không cần tải file)
+  rawContent  String?      @db.Text @map("raw_content") 
+  
+  // KHO BÁU CỦA AI: Lưu tóm tắt, độ khó, tags... { "summary": "...", "difficulty": "B1", "tags": ["finance", "money"] }
+  aiMetadata  Json?        @default("{}") @map("ai_metadata")
+  
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items       LearningItem[]
+  tasks       Task[]
+
+  @@map("resources")
+}
+
+model LearningItem {
+  id              String   @id @default(uuid())
+  resourceId      String?  @map("resource_id") // Từ tài liệu nào mà ra? (Có thể null nếu thêm tay)
+  
+  term            String   // Từ vựng hoặc Cấu trúc câu
+  type            ItemType @default(VOCABULARY)
+  definition      String?  @db.Text
+  exampleSentence String?  @db.Text @map("example_sentence")
+  
+  // MỞ RỘNG VÔ HẠN: Lưu IPA, ảnh minh họa, từ đồng nghĩa... { "ipa": "/həˈləʊ/", "synonyms": ["hi", "greetings"] }
+  extraInfo       Json?    @default("{}") @map("extra_info")
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  resource        Resource?      @relation(fields: [resourceId], references: [id])
+  progress        UserProgress[]
+
+  @@index([term]) // Tìm kiếm từ vựng cực nhanh
+  @@map("learning_items")
+}
+
+model UserProgress {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  itemId         String    @map("item_id")
+  
+  proficiency    Int       @default(0) // Độ thành thạo: 0 (Mới) -> 5 (Master)
+  nextReviewDate DateTime? @map("next_review_date") // Ngày AI nhắc học lại (Spaced Repetition)
+  
+  // Lưu lịch sử tương tác: { "logs": [{ "date": "2024-01-01", "result": "forgot" }] }
+  reviewHistory  Json?     @default("{}") @map("review_history")
+  
+  lastReviewedAt DateTime  @default(now()) @map("last_reviewed_at")
+
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item           LearningItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemId]) // Một người chỉ học 1 từ này 1 lần duy nhất (tránh trùng lặp)
+  @@index([nextReviewDate])  // Để query nhanh: "Hôm nay cần ôn từ nào?"
+  @@map("user_progress")
+}

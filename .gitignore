@@ -1,37 +1,47 @@
-# Node modules
+# Dependencies
 node_modules/
+.npm
+.eslintcache
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Build outputs
-dist/
-build/
-.next/
-out/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+pnpm-debug.log*
+lerna-debug.log*
+prisma_log.txt
+verify.log
+verify_output.txt
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
-logs/
-*.log
+# Build
+dist/
+dist-ssr/
+build/
+.next/
+out/
 
-# Database
-*.sqlite
-*.db
+# IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 
-# MinIO data
-minio-data/
+# Project specific
+life-os-backend/.env
+life-os-frontend/dist/
+life-os-frontend/node_modules/
+life-os-backend/node_modules/
