@@ -1,19 +1,20 @@
 // src/services/learning.service.js
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
-const { analyzeTextWithGemini } = require('./ai.service');
+const { analyzeTextWithGemini, evaluateWritingWithGemini } = require('./ai.service');
+const habitService = require('./habit.service');
 
 /**
  * Service xử lý việc tạo tài liệu học tập và tự động lên lịch Task
  * @param {String} userId - ID của người dùng
  * @param {String} textContent - Nội dung văn bản cần học
- * @param {String} title - Tiêu đề bài học
+ * @param {String} sourceUrl - URL gốc (VD: Link YouTube)
  */
-const createLearningResource = async (userId, textContent, title) => {
+const createLearningResource = async (userId, textContent, title, modelId = null, sourceUrl = null) => {
   try {
     // 1. Gọi AI phân tích
-    console.log("🤖 [1/3] Đang gửi cho Gemini phân tích...");
-    const aiResult = await analyzeTextWithGemini(textContent);
+    console.log(`🤖 [1/3] Đang gửi cho Gemini phân tích (Model: ${modelId || 'default'})...`);
+    const aiResult = await analyzeTextWithGemini(textContent, modelId);
 
     // Validate dữ liệu từ AI tránh lỗi null
     const vocabList = Array.isArray(aiResult.vocabularyList) ? aiResult.vocabularyList : [];
@@ -29,41 +30,64 @@ const createLearningResource = async (userId, textContent, title) => {
         data: {
           userId: userId,
           title: title,
-          type: "TEXT",
+          type: sourceUrl && sourceUrl.includes('youtube.com') || sourceUrl && sourceUrl.includes('youtu.be') ? "YOUTUBE" : "TEXT",
           rawContent: textContent,
           aiMetadata: {
             summary: aiResult.summary || "No summary",
             difficulty: aiResult.difficulty || "Medium",
-            keywords: aiResult.keywords || []
+            keywords: aiResult.keywords || [],
+            vocabularyList: vocabList,
+            sourceUrl: sourceUrl
           },
-
-          // Tạo luôn các từ vựng đi kèm
-          items: {
+          learningItems: {
             create: vocabList.map(item => ({
               term: item.word || item.term,
               definition: item.definition,
-              type: "VOCABULARY"
+              exampleSentence: item.example,
+              type: "VOCABULARY",
+              extraInfo: {
+                ipa: item.ipa,
+                synonyms: item.synonyms,
+                timestamp: item.timestamp
+              }
             }))
           }
+        },
+        include: {
+          learningItems: true
         }
       });
 
-      // B. TỰ ĐỘNG TẠO TASK (Life OS Magic ✨)
-      // Logic: Tạo task nhắc ôn tập vào ngày mai
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1); // +1 ngày
+      // B. Khởi tạo tiến trình học (SRS) cho từng từ vựng
+      // Set ngày ôn tập đầu tiên là NGAY BÂY GIỜ để người dùng thấy Flashcard lập tức
+      const now = new Date();
 
+      await Promise.all(newResource.learningItems.map(item =>
+        tx.userProgress.create({
+          data: {
+            userId: userId,
+            itemId: item.id,
+            proficiency: 0,
+            nextReviewDate: now
+          }
+        })
+      ));
+
+      // C. TỰ ĐỘNG TẠO TASK
       const newTask = await tx.task.create({
         data: {
           userId: userId,
-          resourceId: newResource.id, // Link chặt chẽ với tài liệu vừa tạo
+          resourceId: newResource.id,
           title: `Ôn tập: ${title}`,
           description: `Review ${vocabList.length} từ vựng mới và tóm tắt.`,
           priority: "HIGH",
-          dueDate: tomorrow,
+          dueDate: now,
           status: "TODO"
         }
       });
+
+      // D. Update User Habit (Micro-learning)
+      await habitService.logActivity(userId, 'ADD_VOCAB');
 
       return { resource: newResource, task: newTask };
     });
@@ -77,4 +101,118 @@ const createLearningResource = async (userId, textContent, title) => {
   }
 };
 
-module.exports = { createLearningResource };
+const getAllResources = async (userId) => {
+  return await prisma.resource.findMany({
+    where: { userId },
+    include: {
+      learningItems: true, // Lấy luôn từ vựng đi kèm
+      tasks: true          // Lấy luôn task liên quan
+    },
+    orderBy: { createdAt: 'desc' } // Bài mới nhất lên đầu
+  });
+};
+
+const getResourceById = async (id, userId) => {
+  return await prisma.resource.findFirst({
+    where: {
+      id: id,
+      userId: userId // Bảo mật: Chỉ lấy nếu thuộc về đúng User
+    },
+    include: {
+      learningItems: {
+        include: {
+          progress: {
+            where: { userId } // Chỉ lấy progress của chính user này
+          }
+        }
+      },
+      tasks: true
+    }
+  });
+};
+
+const getDueItems = async (userId) => {
+  const today = new Date();
+  return await prisma.userProgress.findMany({
+    where: {
+      userId,
+      nextReviewDate: {
+        lte: today // Lấy các từ đến hạn hoặc quá hạn
+      }
+    },
+    include: {
+      item: {
+        include: {
+          resource: true
+        }
+      }
+    }
+  });
+};
+
+const updateReviewProgress = async (userId, progressId, result) => {
+  const progress = await prisma.userProgress.findUnique({
+    where: { id: progressId }
+  });
+
+  if (!progress || progress.userId !== userId) {
+    throw new Error("Không tìm thấy tiến trình học");
+  }
+
+  let newProficiency = progress.proficiency;
+  if (result === 'remembered') {
+    newProficiency = Math.min(newProficiency + 1, 5);
+  } else {
+    newProficiency = Math.max(newProficiency - 1, 0);
+  }
+
+  // Thuật toán SRS đơn giản
+  const intervals = [1, 2, 4, 7, 14, 30]; // số ngày
+  const nextInterval = intervals[newProficiency];
+
+  const now = new Date();
+  const newNextReviewDate = new Date(now);
+  newNextReviewDate.setDate(newNextReviewDate.getDate() + nextInterval);
+
+  const reviewHistory = {
+    logs: [
+      ...(progress.reviewHistory?.logs || []),
+      { date: now, result }
+    ]
+  };
+
+  const updatedProgress = await prisma.userProgress.update({
+    where: { id: progressId },
+    data: {
+      proficiency: newProficiency,
+      nextReviewDate: newNextReviewDate,
+      lastReviewedAt: now,
+      reviewHistory: reviewHistory
+    }
+  });
+
+  // Ghi nhận thói quen học tập (Làm bài ôn tập)
+  await habitService.logActivity(userId, 'STUDY_SESSION');
+
+  return updatedProgress;
+};
+
+const evaluateWritingPractice = async (userId, text, targetWords, modelId = null) => {
+  console.log(`📝 Bắt đầu chấm bài viết cho User ${userId}...`);
+  try {
+    const result = await evaluateWritingWithGemini(text, targetWords, modelId);
+    return result;
+  } catch (error) {
+    console.error("❌ Lỗi khi chấm bài viết:", error);
+    throw error;
+  }
+};
+
+module.exports = {
+  createLearningResource,
+  getAllResources,
+  getResourceById,
+  getDueItems,
+  updateReviewProgress,
+  evaluateWritingPractice
+};

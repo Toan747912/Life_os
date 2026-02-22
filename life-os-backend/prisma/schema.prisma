@@ -38,11 +38,16 @@ model User {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
+  // Habit Tracking
+  currentStreak Int      @default(0) @map("current_streak")
+  longestStreak Int      @default(0) @map("longest_streak")
+  lastActiveDate DateTime? @map("last_active_date")
+
   // Quan hệ: Một User có nhiều Resource và nhiều Progress
   resources   Resource[]
   progress    UserProgress[]
-
   tasks       Task[]
+  activityLogs ActivityLog[]
 
   @@map("users") // Tên bảng trong DB là 'users' (số nhiều, chữ thường)
 }
@@ -85,7 +90,7 @@ model Resource {
   createdAt   DateTime     @default(now()) @map("created_at")
 
   user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items       LearningItem[]
+  learningItems LearningItem[]
   tasks       Task[]
 
   @@map("resources")
@@ -131,4 +136,18 @@ model UserProgress {
   @@unique([userId, itemId]) // Một người chỉ học 1 từ này 1 lần duy nhất (tránh trùng lặp)
   @@index([nextReviewDate])  // Để query nhanh: "Hôm nay cần ôn từ nào?"
   @@map("user_progress")
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  action    String   // e.g. "STUDY_SESSION", "ADD_VOCAB", "FOCUS_TIMER"
+  count     Int      @default(1)
+  date      DateTime @db.Date // Only stores the date for grouping (e.g. 2024-01-01)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, action, date]) // Ensure one action type per user per day; use count for duplicates
+  @@map("activity_logs")
 }

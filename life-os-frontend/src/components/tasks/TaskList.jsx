@@ -1,91 +1,108 @@
-import React, { useEffect, useState } from 'react';
-import TaskItem from './TaskItem';
-import taskService from '../../services/taskService';
-import { Loader2, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import api from '../../services/api'; // Đường dẫn tới file cấu hình axios
+import { CheckCircle2, Circle, Calendar, ArrowRight } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 const TaskList = () => {
+    const { user } = useAuth();
     const [tasks, setTasks] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
 
-    // Hardcoded for now until auth is ready
-    const userId = 1;
+    // Fetch tasks khi component load
+    useEffect(() => {
+        fetchTasks();
+    }, []);
 
     const fetchTasks = async () => {
         try {
-            setLoading(true);
-            const result = await taskService.getDailyTasks(userId);
-            setTasks(result.data || []);
-            setError(null);
-        } catch (err) {
-            console.error("Failed to fetch tasks:", err);
-            setError("Unable to load tasks. Ensure backend is running.");
+            const date = new Date().toISOString();
+            const res = await api.get(`/tasks?date=${date}`);
+            setTasks(res.data.data || []);
+        } catch (error) {
+            console.error("Failed to fetch tasks", error);
         } finally {
             setLoading(false);
         }
     };
 
-    useEffect(() => {
-        fetchTasks();
-    }, []);
-
-    const handleToggle = async (taskId) => {
-        // Optimistic update
+    const toggleTask = async (taskId) => {
+        // Optimistic UI Update (Cập nhật giao diện ngay lập tức)
         setTasks(prev => prev.map(t =>
-            t.id === taskId ? { ...t, isCompleted: !t.isCompleted } : t
+            t.id === taskId ? { ...t, status: t.status === 'DONE' ? 'TODO' : 'DONE' } : t
         ));
 
+        // Gọi API cập nhật ngầm
         try {
-            await taskService.toggleTask(taskId, userId);
-        } catch (err) {
-            console.error("Toggle failed:", err);
-            // Rollback on error
-            setTasks(prev => prev.map(t =>
-                t.id === taskId ? { ...t, isCompleted: !t.isCompleted } : t
-            ));
+            await api.patch(`/tasks/${taskId}/toggle`);
+        } catch (error) {
+            console.error("Error toggling task", error);
+            fetchTasks(); // Revert nếu lỗi
         }
     };
 
+    if (loading) return <div className="py-10 text-center text-slate-400">Loading tasks...</div>;
+
     return (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-                <div>
-                    <h2 className="text-xl font-bold text-slate-900">Today's Habits & Tasks</h2>
-                    <p className="text-sm text-slate-500 mt-1">
-                        {tasks.filter(t => t.isCompleted).length}/{tasks.length} completed
-                    </p>
-                </div>
-                <button
-                    onClick={fetchTasks}
-                    className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-400 hover:text-indigo-600"
-                    title="Refresh"
-                >
-                    <RefreshCw size={18} className={loading ? "animate-spin" : ""} />
-                </button>
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                <h3 className="font-semibold text-lg text-slate-900">Today's Tasks</h3>
+                <span className="text-xs font-medium bg-slate-100 text-slate-600 px-2 py-1 rounded-full">
+                    {tasks.filter(t => t.status === 'DONE').length}/{tasks.length} Completed
+                </span>
             </div>
 
-            <div className="p-6">
-                {loading && tasks.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-slate-400">
-                        <Loader2 className="animate-spin mb-4" size={32} />
-                        <p className="font-medium">Loading your tasks...</p>
-                    </div>
-                ) : error ? (
-                    <div className="p-4 bg-rose-50 text-rose-600 rounded-xl text-center">
-                        {error}
-                    </div>
-                ) : tasks.length === 0 ? (
-                    <div className="text-center py-12 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                        <p className="font-medium">No tasks for today. Take a break!</p>
+            <div className="divide-y divide-slate-50">
+                {tasks.length === 0 ? (
+                    <div className="p-8 text-center text-slate-500">
+                        No tasks for today. Add something using AI!
                     </div>
                 ) : (
-                    <div className="grid gap-3">
-                        {tasks.map(task => (
-                            <TaskItem key={task.id} task={task} onToggle={handleToggle} />
-                        ))}
-                    </div>
+                    tasks.map((task) => (
+                        <div
+                            key={task.id}
+                            className={`group p-4 flex items-start gap-4 transition-all hover:bg-slate-50/50
+                                ${task.status === 'DONE' ? 'opacity-50' : ''}
+                            `}
+                        >
+                            <button
+                                onClick={() => toggleTask(task.id)}
+                                className={`mt-1 transition-colors ${task.status === 'DONE' ? 'text-emerald-500' : 'text-slate-300 hover:text-indigo-500'}`}
+                            >
+                                {task.status === 'DONE' ? <CheckCircle2 size={24} weight="fill" /> : <Circle size={24} />}
+                            </button>
+
+                            <div className="flex-1">
+                                <p className={`font-medium text-base ${task.status === 'DONE' ? 'line-through text-slate-500' : 'text-slate-900'}`}>
+                                    {task.title}
+                                </p>
+                                {task.description && (
+                                    <p className="text-sm text-slate-500 mt-1">{task.description}</p>
+                                )}
+                                <div className="flex gap-2 mt-2">
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded border 
+                                        ${task.priority === 'HIGH' ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-slate-50 text-slate-500 border-slate-200'}
+                                    `}>
+                                        {task.priority}
+                                    </span>
+                                    {task.resource && (
+                                        <span className="text-[10px] flex items-center gap-1 text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
+                                            Resource
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    ))
                 )}
             </div>
+
+            {tasks.length > 0 && (
+                <div className="p-4 bg-slate-50 border-t border-slate-100 text-center">
+                    <button className="text-sm font-medium text-indigo-600 hover:text-indigo-700 flex items-center justify-center gap-1 mx-auto">
+                        View All Tasks <ArrowRight size={16} />
+                    </button>
+                </div>
+            )}
         </div>
     );
 };
