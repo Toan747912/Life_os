@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Flashcard from '../components/learning/Flashcard';
-import api from '../services/api';
+import api, { activityService } from '../services/api';
 import { Loader2, ArrowLeft, CheckCircle2, Trophy } from 'lucide-react';
 
 const StudySession = () => {
@@ -32,6 +32,7 @@ const StudySession = () => {
 
         try {
             await api.patch(`/learning/items/${currentItem.id}/review`, { result });
+            activityService.log('REVIEW_FLASHCARD').catch(e => console.error("Log error", e));
 
             setResults(prev => ({
                 ...prev,

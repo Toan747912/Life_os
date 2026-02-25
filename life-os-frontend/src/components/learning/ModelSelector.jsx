@@ -30,7 +30,7 @@ const ModelSelector = ({ models, selectedModel, onSelect }) => {
                         >
                             <div className="flex justify-between items-start mb-1 pr-6">
                                 <div className="flex items-center gap-2">
-                                    <span className={`text-sm font-bold ${isSelected ? 'text-indigo-700' : 'text-slate-700'}`}>
+                                    <span className={`text-sm font-bold ${isSelected ? 'text-indigo-700' : (isError ? 'text-slate-400' : 'text-slate-700')}`}>
                                         {model.displayName.replace('(Fallback)', '').trim()}
                                     </span>
                                     {isSelected && !isError && (
@@ -41,14 +41,14 @@ const ModelSelector = ({ models, selectedModel, onSelect }) => {
                                     )}
                                 </div>
                                 {isError && (
-                                    <span className="text-[9px] font-bold text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded-md uppercase tracking-tight">
-                                        {health.reason}
-                                    </span>
+                                    <div className="absolute top-2 right-2 text-[9px] font-bold text-rose-500 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-md uppercase tracking-tight flex items-center gap-1">
+                                        Limit Reached
+                                    </div>
                                 )}
                             </div>
 
-                            <p className="text-[10px] text-slate-500 line-clamp-1 mb-2">
-                                {model.description}
+                            <p className={`text-[10px] line-clamp-1 mb-2 ${isError ? 'text-rose-400/80 font-medium' : 'text-slate-500'}`}>
+                                {isError ? health.reason : model.description}
                             </p>
 
                             <div className="flex gap-2 mt-auto">

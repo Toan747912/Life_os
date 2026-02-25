@@ -9,5 +9,6 @@ router.patch('/preferences', userController.updatePreferences);
 router.get('/stats', userController.getUserStats);
 router.get('/heatmap', userController.getHeatmap);
 router.get('/quests', userController.getQuests);
+router.get('/insights', userController.getUserInsights);
 
 module.exports = router;

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { PenTool, Send, CheckCircle2, AlertTriangle, Lightbulb, RefreshCw } from 'lucide-react';
-import { learningService } from '../services/api';
+import { learningService, activityService } from '../services/api';
 
 const WritingPractice = ({ targetWords = [] }) => {
     const [text, setText] = useState('');
@@ -28,6 +28,7 @@ const WritingPractice = ({ targetWords = [] }) => {
                 targetWords
             });
             setResult(response.data.data);
+            activityService.log('PRACTICE_WRITING').catch(e => console.error(e));
         } catch (err) {
             setError(err.response?.data?.error || 'Đã xảy ra lỗi khi chấm bài. Vui lòng thử lại.');
             console.error("Lỗi khi gọi API evaluate-writing:", err);
@@ -84,8 +85,8 @@ const WritingPractice = ({ targetWords = [] }) => {
                         onClick={handleSubmit}
                         disabled={loading}
                         className={`w-full py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all duration-300 ${loading
-                                ? 'bg-purple-100 text-purple-400 cursor-not-allowed'
-                                : 'bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-200/50'
+                            ? 'bg-purple-100 text-purple-400 cursor-not-allowed'
+                            : 'bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-200/50'
                             }`}
                     >
                         {loading ? (
@@ -147,16 +148,31 @@ const WritingPractice = ({ targetWords = [] }) => {
                         </p>
                     </div>
 
-                    {/* Suggested Revision */}
-                    <div className="bg-blue-50/50 rounded-2xl p-5 border border-blue-100 relative group overflow-hidden">
-                        <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 rounded-l-2xl"></div>
-                        <h3 className="font-bold text-blue-900 flex items-center gap-2 mb-3">
-                            <Lightbulb size={18} className="text-blue-600" /> Bản sửa mẫu (Native-like)
-                        </h3>
-                        <p className="text-blue-800 leading-relaxed italic">
-                            "{result.suggestedRevision}"
-                        </p>
-                    </div>
+                    {/* Suggested Revision - Formal */}
+                    {result.suggestedRevisionFormal && (
+                        <div className="bg-blue-50/50 rounded-2xl p-5 border border-blue-100 relative group overflow-hidden">
+                            <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 rounded-l-2xl"></div>
+                            <h3 className="font-bold text-blue-900 flex items-center gap-2 mb-3">
+                                <Lightbulb size={18} className="text-blue-600" /> Bản sửa mẫu (Formal / Trang trọng)
+                            </h3>
+                            <p className="text-blue-800 leading-relaxed italic">
+                                "{result.suggestedRevisionFormal}"
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Suggested Revision - Casual */}
+                    {result.suggestedRevisionCasual && (
+                        <div className="bg-orange-50/50 rounded-2xl p-5 border border-orange-100 relative group overflow-hidden">
+                            <div className="absolute top-0 left-0 w-1 h-full bg-orange-500 rounded-l-2xl"></div>
+                            <h3 className="font-bold text-orange-900 flex items-center gap-2 mb-3">
+                                <Lightbulb size={18} className="text-orange-600" /> Bản sửa mẫu (Casual / Giao tiếp)
+                            </h3>
+                            <p className="text-orange-800 leading-relaxed italic">
+                                "{result.suggestedRevisionCasual}"
+                            </p>
+                        </div>
+                    )}
 
                     <button
                         onClick={handleReset}

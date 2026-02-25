@@ -8,8 +8,13 @@ const extractContent = async (type, data) => {
     switch (type) {
       case 'YOUTUBE':
         // data là URL video
-        const transcript = await YoutubeTranscript.fetchTranscript(data);
-        return transcript.map(i => `[${Math.floor(i.offset / 1000)}s] ${i.text}`).join(' ');
+        try {
+          const transcript = await YoutubeTranscript.fetchTranscript(data);
+          return transcript.map(i => `[${Math.floor(i.offset / 1000)}s] ${i.text}`).join(' ');
+        } catch (ytError) {
+          console.error(`[YOUTUBE_ERR] Lỗi khi lấy CC:`, ytError.message);
+          throw new Error("Video này không có phụ đề (CC) hoặc YouTube không cho phép trích xuất. Hãy chọn video khác có phụ đề, hoặc tải video về máy và dùng tính năng Upload Video.");
+        }
 
       case 'PDF':
         // data là Buffer của file upload

@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Volume2, RotateCw, Type, CheckCircle2, XCircle, BookOpen, Youtube } from 'lucide-react';
+import { Volume2, RotateCw, Type, CheckCircle2, XCircle, BookOpen, Youtube, Headphones } from 'lucide-react';
+import { playTextToSpeech } from '../../utils/speech';
 
 const Flashcard = ({ item, onResult }) => {
     const [isFlipped, setIsFlipped] = useState(false);
-    const [mode, setMode] = useState('standard'); // 'standard' or 'typing'
+    const [mode, setMode] = useState('standard'); // 'standard', 'typing', 'blind'
     const [typedText, setTypedText] = useState('');
     const [evalStatus, setEvalStatus] = useState('idle'); // 'idle', 'correct', 'incorrect'
     const inputRef = useRef(null);
@@ -27,18 +28,24 @@ const Flashcard = ({ item, onResult }) => {
 
     // Auto focus input when in typing mode
     useEffect(() => {
-        if (!isFlipped && mode === 'typing' && inputRef.current) {
+        if (!isFlipped && (mode === 'typing' || mode === 'blind') && inputRef.current) {
             inputRef.current.focus();
         }
     }, [isFlipped, mode, item]);
 
+    // Auto-play audio when switching to blind mode
+    useEffect(() => {
+        if (!isFlipped && mode === 'blind' && term) {
+            const timer = setTimeout(() => {
+                playAudio();
+            }, 400);
+            return () => clearTimeout(timer);
+        }
+    }, [isFlipped, mode, item, term]);
+
     const playAudio = (e) => {
         if (e) e.stopPropagation();
-        if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(term);
-        utterance.lang = 'en-US';
-        utterance.rate = 0.85;
-        window.speechSynthesis.speak(utterance);
+        playTextToSpeech(term, 0.85);
     };
 
     const handleKeyDown = (e) => {
@@ -69,28 +76,35 @@ const Flashcard = ({ item, onResult }) => {
 
     const toggleMode = (e) => {
         e.stopPropagation();
-        setMode(mode === 'standard' ? 'typing' : 'standard');
+        if (mode === 'standard') setMode('typing');
+        else if (mode === 'typing') setMode('blind');
+        else setMode('standard');
         setTypedText('');
         setEvalStatus('idle');
+        setIsFlipped(false);
     };
 
     return (
-        <div className="w-full max-w-md mx-auto perspective-1000 h-96">
+        <div className="w-full max-w-md mx-auto h-96" style={{ perspective: '1000px' }}>
             <div
-                className={`relative w-full h-full transition-transform duration-500 transform-style-3d ${isFlipped ? 'rotate-y-180' : 'cursor-pointer'}`}
+                className={`relative w-full h-full transition-transform duration-500 ${isFlipped ? 'cursor-default' : 'cursor-pointer'}`}
+                style={{ transformStyle: 'preserve-3d', transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
                 onClick={() => {
                     if (mode === 'standard') setIsFlipped(!isFlipped);
                 }}
             >
                 {/* Front Side */}
-                <div className={`absolute inset-0 backface-hidden bg-white rounded-3xl border-2 shadow-xl flex flex-col p-8 text-center transition-colors ${evalStatus === 'correct' ? 'border-emerald-400 bg-emerald-50' :
-                    evalStatus === 'incorrect' ? 'border-rose-400 bg-rose-50' :
-                        'border-slate-100'
-                    }`}>
+                <div
+                    className={`absolute inset-0 bg-white rounded-3xl border-2 shadow-xl flex flex-col p-8 text-center transition-colors ${evalStatus === 'correct' ? 'border-emerald-400 bg-emerald-50' :
+                        evalStatus === 'incorrect' ? 'border-rose-400 bg-rose-50' :
+                            'border-slate-100'
+                        }`}
+                    style={{ backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}
+                >
                     {/* Header Controls */}
                     <div className="flex justify-between items-center mb-4">
                         <span className="text-sm font-semibold text-indigo-500 uppercase tracking-widest">
-                            {mode === 'standard' ? 'Standard' : 'Typing Mode'}
+                            {mode === 'standard' ? 'Standard' : mode === 'typing' ? 'Typing Mode' : 'Blind Listening'}
                         </span>
                         <div className="flex gap-2">
                             {getYoutubeContextUrl() && (
@@ -113,11 +127,19 @@ const Flashcard = ({ item, onResult }) => {
                                 <Volume2 size={18} />
                             </button>
                             <button
-                                onClick={toggleMode}
-                                className={`p-2 rounded-full transition-colors z-10 relative ${mode === 'typing' ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-100'}`}
-                                title={mode === 'standard' ? "Switch to Typing Mode" : "Switch to Standard Mode"}
+                                onClick={(e) => {
+                                    toggleMode(e);
+                                    // Pre-warm the speech synthesis so autoplay works after timeout
+                                    if (mode === 'typing' && 'speechSynthesis' in window) {
+                                        const utterance = new SpeechSynthesisUtterance('');
+                                        utterance.volume = 0;
+                                        window.speechSynthesis.speak(utterance);
+                                    }
+                                }}
+                                className={`p-2 rounded-full transition-colors z-10 relative ${mode !== 'standard' ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-100'}`}
+                                title={`Current Mode: ${mode === 'standard' ? 'Standard' : mode === 'typing' ? 'Typing' : 'Blind Listening'}. Click to switch.`}
                             >
-                                {mode === 'standard' ? <Type size={18} /> : <BookOpen size={18} />}
+                                {mode === 'standard' ? <BookOpen size={18} /> : mode === 'typing' ? <Type size={18} /> : <Headphones size={18} />}
                             </button>
                         </div>
                     </div>
@@ -133,15 +155,26 @@ const Flashcard = ({ item, onResult }) => {
                             </div>
                         </div>
                     ) : (
-                        // TYPING MODE
+                        // TYPING OR BLIND MODE
                         <div className="flex-1 flex flex-col items-center justify-center space-y-4">
-                            <div className="bg-slate-50 p-4 rounded-xl w-full text-slate-700 italic border border-slate-100 text-sm mb-2 shadow-inner">
-                                {definition}
-                            </div>
-                            {synonyms && synonyms.length > 0 && (
-                                <p className="text-xs text-slate-400">
-                                    <span className="font-semibold text-slate-500">Hint:</span> {synonyms.join(', ')}
-                                </p>
+                            {mode === 'typing' ? (
+                                <>
+                                    <div className="bg-slate-50 p-4 rounded-xl w-full text-slate-700 italic border border-slate-100 text-sm mb-2 shadow-inner">
+                                        {definition}
+                                    </div>
+                                    {synonyms && synonyms.length > 0 && (
+                                        <p className="text-xs text-slate-400">
+                                            <span className="font-semibold text-slate-500">Hint:</span> {synonyms.join(', ')}
+                                        </p>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="bg-indigo-50/50 p-5 rounded-xl w-full flex flex-col items-center justify-center border border-indigo-100 mb-2">
+                                    <button onClick={playAudio} className="w-16 h-16 bg-white text-indigo-600 rounded-full flex items-center justify-center hover:bg-indigo-50 transition shadow-md mb-3 animate-pulse">
+                                        <Volume2 size={32} />
+                                    </button>
+                                    <p className="text-xs font-bold text-indigo-800 uppercase tracking-widest text-center mt-1">Listen & Type the exact word</p>
+                                </div>
                             )}
 
                             <div className="relative w-full z-10 flex">
@@ -178,7 +211,8 @@ const Flashcard = ({ item, onResult }) => {
 
                 {/* Back Side */}
                 <div
-                    className="absolute inset-0 backface-hidden bg-indigo-600 rounded-3xl shadow-xl flex flex-col p-8 text-white rotate-y-180 overflow-y-auto"
+                    className="absolute inset-0 bg-indigo-600 rounded-3xl shadow-xl flex flex-col p-8 text-white overflow-y-auto"
+                    style={{ backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}
                     onClick={(e) => {
                         // In typing mode, clicking back side doesn't flip back to front if evaluating
                         if (mode === 'standard' || evalStatus === 'idle') {
@@ -207,7 +241,7 @@ const Flashcard = ({ item, onResult }) => {
                         </div>
                     </div>
 
-                    {mode === 'typing' && evalStatus === 'incorrect' && (
+                    {mode !== 'standard' && evalStatus === 'incorrect' && (
                         <div className="bg-rose-500/30 text-white p-3 rounded-xl mb-4 text-center border border-rose-400/50">
                             <p className="text-xs font-bold uppercase tracking-wider mb-1 text-rose-200">Correct Answer:</p>
                             <p className="text-2xl font-black tracking-wide">{term}</p>
@@ -221,7 +255,7 @@ const Flashcard = ({ item, onResult }) => {
                     )}
 
                     {exampleSentence && (
-                        <div className={`mt-auto ${mode === 'typing' ? '' : 'pt-6 border-t border-white/20'}`}>
+                        <div className={`mt-auto ${mode !== 'standard' ? '' : 'pt-6 border-t border-white/20'}`}>
                             <span className="text-xs font-bold uppercase tracking-wider opacity-75 block mb-2">Example</span>
                             <p className="italic text-indigo-100 text-lg">"{exampleSentence}"</p>
                         </div>

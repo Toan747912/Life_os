@@ -1,5 +1,7 @@
 const learningService = require('../services/learning.service');
 const contentService = require('../services/content.service');
+const aiService = require('../services/ai.service');
+const fs = require('fs');
 
 const analyzeAndSave = async (req, res) => {
   try {
@@ -8,12 +10,21 @@ const analyzeAndSave = async (req, res) => {
     console.log("Process request for userId:", userId);
     let finalContent = content;
 
-    // Nếu có file upload (PDF/Image)
+    // Nếu có file upload (PDF/Image/Media)
     if (req.file) {
-      // type sẽ được gửi kèm hoặc tự định nghĩa
-      type = 'PDF';
-      finalContent = await contentService.extractContent('PDF', req.file.buffer);
-      title = title || req.file.originalname;
+      const mime = req.file.mimetype;
+      if (mime.startsWith('audio/') || mime.startsWith('video/')) {
+        type = 'MEDIA';
+        finalContent = req.file.path; // Pass file path for Gemini to upload
+        title = title || req.file.originalname;
+      } else {
+        type = 'PDF';
+        const fileBuffer = fs.readFileSync(req.file.path);
+        finalContent = await contentService.extractContent('PDF', fileBuffer);
+        title = title || req.file.originalname;
+        // Clean up PDF temp file immediately
+        fs.unlinkSync(req.file.path);
+      }
     }
     // Nếu là Link YouTube
     else if (type === 'YOUTUBE') {
@@ -43,9 +54,9 @@ const analyzeAndSave = async (req, res) => {
       console.log(`⚠️ [ANALYSIS] No modelId found, falling back to: ${modelId}`);
     }
 
-    // Gọi service cũ để chạy AI, truyền thêm URL nguồn nếu có
+    // Gọi service cũ để chạy AI, truyền thêm URL nguồn và type
     const sourceUrl = type === 'YOUTUBE' ? content : null;
-    const data = await learningService.createLearningResource(userId, finalContent, title, modelId, sourceUrl);
+    const data = await learningService.createLearningResource(userId, finalContent, title, modelId, sourceUrl, type);
 
     res.status(201).json({ message: "Success", data });
 
@@ -87,6 +98,33 @@ const getTodayReviews = async (req, res) => {
     const userId = req.user.id;
     const items = await learningService.getDueItems(userId);
     res.json({ data: items });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const getDictationReviews = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const items = await learningService.getDueDictationSentences(userId);
+    res.json({ data: items });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const submitDictation = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { learningItemId, progressId, userInput, originalText, isCorrect } = req.body;
+
+    if (!learningItemId || !progressId) {
+      return res.status(400).json({ error: "Missing learningItemId or progressId" });
+    }
+
+    const data = await learningService.submitDictationAttempt(userId, learningItemId, progressId, userInput, originalText, isCorrect);
+
+    res.json({ message: "Dictation attempt recorded", data });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -136,12 +174,31 @@ const evaluateWriting = async (req, res) => {
   }
 };
 
+const chatWithAI = async (req, res) => {
+  try {
+    const { messages, context, modelId } = req.body;
+
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "Yêu cầu mảng messages" });
+    }
+
+    const responseText = await aiService.generateRoleplayResponse(messages, context, modelId);
+
+    res.status(200).json({ data: responseText });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 module.exports = {
   analyzeAndSave,
   getResources,
   getResourceDetail,
   getTodayReviews,
+  getDictationReviews, // New Dictation
+  submitDictation,     // New Dictation
   updateReview,
   getModels,
-  evaluateWriting
+  evaluateWriting,
+  chatWithAI
 };

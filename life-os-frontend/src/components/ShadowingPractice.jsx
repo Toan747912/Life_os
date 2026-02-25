@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Volume2, X, StopCircle } from 'lucide-react';
+import { activityService } from '../services/api';
+import { playTextToSpeech } from '../utils/speech';
 
 const ShadowingPractice = ({ targetText, targetIpa, isOpen, onClose }) => {
     const [isRecording, setIsRecording] = useState(false);
@@ -53,6 +55,9 @@ const ShadowingPractice = ({ targetText, targetIpa, isOpen, onClose }) => {
         if (isRecording) {
             recognitionRef.current.stop();
             setIsRecording(false);
+            if (transcript && transcript.split(' ').length > 2) {
+                activityService.log('PRACTICE_SHADOWING').catch(e => console.error(e));
+            }
         } else {
             setTranscript('');
             try {
@@ -66,14 +71,7 @@ const ShadowingPractice = ({ targetText, targetIpa, isOpen, onClose }) => {
 
     const playAudio = () => {
         if (!targetText) return;
-        // Check if synthesis is speaking and stop it if so
-        if (window.speechSynthesis.speaking) {
-            window.speechSynthesis.cancel();
-        }
-        const utterance = new SpeechSynthesisUtterance(targetText);
-        utterance.lang = 'en-US';
-        utterance.rate = 0.85; // Slightly slower for language learning
-        window.speechSynthesis.speak(utterance);
+        playTextToSpeech(targetText, 0.85);
     };
 
     const compareText = () => {
@@ -152,8 +150,8 @@ const ShadowingPractice = ({ targetText, targetIpa, isOpen, onClose }) => {
                             <button
                                 onClick={toggleRecording}
                                 className={`flex items-center justify-center gap-2 w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${isRecording
-                                        ? 'bg-rose-50 text-rose-600 border-2 border-rose-500 animate-pulse'
-                                        : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-200/50 hover:shadow-indigo-300/50'
+                                    ? 'bg-rose-50 text-rose-600 border-2 border-rose-500 animate-pulse'
+                                    : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-200/50 hover:shadow-indigo-300/50'
                                     }`}
                             >
                                 {isRecording ? (

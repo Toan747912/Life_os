@@ -4,12 +4,15 @@ import {
     LayoutDashboard,
     CheckSquare,
     BookOpen,
+    Headphones,
     Settings,
     User,
     Menu,
     X,
     Brain,
-    Zap
+    Zap,
+    LogOut,
+    PlusCircle
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -36,11 +39,24 @@ const Layout = ({ children }) => {
     const [isSidebarOpen, setSidebarOpen] = useState(true);
     const location = useLocation(); // Lấy đường dẫn hiện tại để active menu
 
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    const userName = user.fullName || 'User';
+    const userInitial = userName.charAt(0).toUpperCase();
+
+    const handleLogout = () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('userId');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+    };
+
     // Danh sách menu (để dễ quản lý link)
     const navItems = [
         { icon: LayoutDashboard, label: "Dashboard", path: "/" },
         { icon: BookOpen, label: "Learning", path: "/learning" },
         { icon: Zap, label: "Study", path: "/study" },
+        { icon: Headphones, label: "Dictation", path: "/dictations" },
+        { icon: PlusCircle, label: "New Dictation", path: "/dictation/create" },
         { icon: CheckSquare, label: "Tasks", path: "/tasks" },
         { icon: Settings, label: "Settings", path: "/settings" },
     ];
@@ -80,10 +96,14 @@ const Layout = ({ children }) => {
                     </nav>
 
                     {/* Footer Sidebar */}
-                    <div className="mt-auto border-t border-slate-100 pt-4">
+                    <div className="mt-auto border-t border-slate-100 pt-4 space-y-2">
                         <button className="flex items-center w-full gap-3 px-4 py-3 rounded-lg text-gray-600 hover:bg-indigo-50 hover:text-indigo-600 transition-all">
                             <User size={20} />
                             <span className="font-medium">Profile</span>
+                        </button>
+                        <button onClick={handleLogout} className="flex items-center w-full gap-3 px-4 py-3 rounded-lg text-red-600 hover:bg-red-50 hover:text-red-700 transition-all">
+                            <LogOut size={20} />
+                            <span className="font-medium">Logout</span>
                         </button>
                     </div>
                 </div>
@@ -109,13 +129,13 @@ const Layout = ({ children }) => {
                         </button>
 
                         <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wider hidden sm:block">
-                            Welcome back, Toàn!
+                            Welcome back, {userName}!
                         </h2>
                     </div>
 
                     <div className="flex items-center gap-4">
                         <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-sm ring-2 ring-white">
-                            TN
+                            {userInitial}
                         </div>
                     </div>
                 </header>

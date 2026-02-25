@@ -1,15 +1,24 @@
-// 1. Kết nối Database
+// prisma/schema.prisma
+
+// ============================================
+// 1. KẾT NỐI DATABASE
+// ============================================
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-// 2. Tạo Client để dùng trong Node.js
+// ============================================
+// 2. CẤU HÌNH CLIENT
+// ============================================
 generator client {
   provider = "prisma-client-js"
 }
 
-// --- ENUMS (Định nghĩa các loại cố định để code sạch hơn) ---
+// ============================================
+// 3. ENUMS (Các kiểu dữ liệu cố định)
+// ============================================
+
 enum ResourceType {
   PDF
   YOUTUBE
@@ -23,13 +32,37 @@ enum ItemType {
   VOCABULARY // Từ vựng
   GRAMMAR    // Ngữ pháp
   CONCEPT    // Khái niệm (Dùng cho môn khác như Tài chính/Code)
+  SENTENCE   // Câu hội thoại (phục vụ nghe chép chính tả Dictation)
 }
 
-// --- MODELS (Bảng dữ liệu) ---
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
 
+enum Language {
+  ENGLISH
+  VIETNAMESE
+  JAPANESE
+  KOREAN
+  CHINESE
+  FRENCH
+  GERMAN
+  SPANISH
+}
+
+// ============================================
+// 4. MODELS (Bảng dữ liệu chính)
+// ============================================
+
+// ------------------------------------------
+// User Model - Quản lý người dùng
+// ------------------------------------------
 model User {
-  id          String   @id @default(uuid()) // ID dạng chuỗi ngẫu nhiên
+  id          String   @id @default(uuid())
   email       String   @unique
+  password    String   // Mật khẩu đã được mã hóa (hashed)
   fullName    String?  @map("full_name")
   
   // Lưu cài đặt: { "theme": "dark", "daily_goal": 50, "target_level": "IELTS 7.0" }
@@ -39,63 +72,52 @@ model User {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   // Habit Tracking
-  currentStreak Int      @default(0) @map("current_streak")
-  longestStreak Int      @default(0) @map("longest_streak")
-  lastActiveDate DateTime? @map("last_active_date")
+  currentStreak     Int       @default(0) @map("current_streak")
+  longestStreak     Int       @default(0) @map("longest_streak")
+  lastActiveDate    DateTime? @map("last_active_date")
 
   // Quan hệ: Một User có nhiều Resource và nhiều Progress
-  resources   Resource[]
-  progress    UserProgress[]
-  tasks       Task[]
-  activityLogs ActivityLog[]
+  resources         Resource[]
+  progress          UserProgress[]
+  tasks             Task[]
+  activityLogs      ActivityLog[]
+  dictations        Dictation[]      // User có thể tạo nhiều bài Dictation
+  dictationAttempts DictationAttempt[] // User có nhiều lần làm bài Dictation
 
-  @@map("users") // Tên bảng trong DB là 'users' (số nhiều, chữ thường)
+  @@map("users")
 }
 
-model Task {
-  id          String    @id @default(uuid())
-  title       String    // Ví dụ: "Ôn tập bài IELTS Reading"
-  description String?
-  status      String    @default("TODO") // TODO, IN_PROGRESS, DONE
-  dueDate     DateTime? // Ngày phải làm
-  priority    String    @default("MEDIUM") // HIGH, MEDIUM, LOW
-  
-  // Quan hệ với User
-  userId      String
-  user        User      @relation(fields: [userId], references: [id])
-
-  // Quan hệ với Learning (Liên kết ngược lại Resource)
-  // Đây là điểm mấu chốt: Task này sinh ra từ tài liệu nào?
-  resourceId  String?
-  resource    Resource? @relation(fields: [resourceId], references: [id])
-
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-}
-
+// ------------------------------------------
+// Resource Model - Tài nguyên học tập
+// ------------------------------------------
 model Resource {
   id          String       @id @default(uuid())
   userId      String       @map("user_id")
   
   title       String
   type        ResourceType @default(TEXT)
-  filePath    String?      @map("file_path") // URL trên Cloudinary/S3
+  filePath    String?      @map("file_path") // URL trên Cloudinary/S3 hoặc đường dẫn file
   
   // Nội dung thô trích xuất từ file (để AI đọc lại mà không cần tải file)
   rawContent  String?      @db.Text @map("raw_content") 
   
-  // KHO BÁU CỦA AI: Lưu tóm tắt, độ khó, tags... { "summary": "...", "difficulty": "B1", "tags": ["finance", "money"] }
+  // KHO BÁU CỦA AI: Lưu tóm tắt, độ khó, tags... 
+  // Ví dụ: { "summary": "...", "difficulty": "B1", "tags": ["finance", "money"] }
   aiMetadata  Json?        @default("{}") @map("ai_metadata")
   
   createdAt   DateTime     @default(now()) @map("created_at")
 
-  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   learningItems LearningItem[]
   tasks       Task[]
+  dictations  Dictation[]  // Từ 1 Resource có thể tạo nhiều bài Dictation
 
   @@map("resources")
 }
 
+// ------------------------------------------
+// LearningItem Model - Từ vựng, ngữ pháp, khái niệm
+// ------------------------------------------
 model LearningItem {
   id              String   @id @default(uuid())
   resourceId      String?  @map("resource_id") // Từ tài liệu nào mà ra? (Có thể null nếu thêm tay)
@@ -105,18 +127,89 @@ model LearningItem {
   definition      String?  @db.Text
   exampleSentence String?  @db.Text @map("example_sentence")
   
-  // MỞ RỘNG VÔ HẠN: Lưu IPA, ảnh minh họa, từ đồng nghĩa... { "ipa": "/həˈləʊ/", "synonyms": ["hi", "greetings"] }
+  // MỞ RỘNG VÔ HẠN: Lưu IPA, ảnh minh họa, từ đồng nghĩa...
+  // Ví dụ: { "ipa": "/həˈləʊ/", "synonyms": ["hi", "greetings"], "imageUrl": "..." }
   extraInfo       Json?    @default("{}") @map("extra_info")
   
   createdAt       DateTime @default(now()) @map("created_at")
 
   resource        Resource?      @relation(fields: [resourceId], references: [id])
   progress        UserProgress[]
+  dictationAttempts DictationAttempt[] // Liên kết với các lần làm Dictation
 
   @@index([term]) // Tìm kiếm từ vựng cực nhanh
   @@map("learning_items")
 }
 
+// ------------------------------------------
+// Dictation Model - Bài Nghe Chép Chính Tả (MỚI)
+// ------------------------------------------
+model Dictation {
+  id          String     @id @default(uuid())
+  userId      String     @map("user_id")
+  resourceId  String?    @map("resource_id") // Từ tài liệu nào (có thể null nếu tạo thủ công)
+  
+  title       String
+  audioUrl    String     @map("audio_url") // URL file audio/video
+  transcript  String     @db.Text // Transcript đầy đủ của toàn bộ đoạn
+  
+  // Cấu trúc câu với timestamp cho từng câu
+  sentences   Json       @default("[]")
+  
+  // Các trường mới cho AI
+  vocabulary  Json?      // [string] - từ vựng mới
+  summary     String?    @db.Text // tóm tắt nội dung
+  sourceType  String     @default("upload") @map("source_type") // upload, youtube, manual
+  sourceUrl   String?    @map("source_url") // URL gốc nếu là YouTube
+  duration    Int?       // Tổng thời lượng (giây)
+
+  difficulty  String     @default("medium")
+  language    String     @default("en")
+  
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resource    Resource?          @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+  attempts    DictationAttempt[] // Một bài Dictation có nhiều lần làm bài
+
+  @@map("dictations")
+}
+
+// ------------------------------------------
+// DictationAttempt Model - Lần làm bài Dictation (MỚI)
+// ------------------------------------------
+model DictationAttempt {
+  id              String   @id @default(uuid())
+  dictationId     String   @map("dictation_id")
+  userId          String   @map("user_id")
+  learningItemId  String?  @map("learning_item_id") // Nếu luyện tập từ câu cụ thể
+  
+  originalText    String   @db.Text @map("original_text") // Câu gốc cần nghe
+  userInput       String   @db.Text @map("user_input") // Những gì user đã gõ
+  
+  // Kết quả chấm điểm
+  accuracyScore   Float    @map("accuracy_score") // Độ chính xác (0-100)
+  levenshteinDist Int      @map("levenshtein_dist") // Khoảng cách Levenshtein
+  timeSpent       Int      @map("time_spent") // Thời gian làm bài (giây)
+  
+  // Chi tiết lỗi - Format: [{ "expected": "hello", "got": "helo", "position": 5 }]
+  errorDetails    Json?    @default("[]") @map("error_details")
+  
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  dictation       Dictation     @relation(fields: [dictationId], references: [id], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  learningItem    LearningItem? @relation(fields: [learningItemId], references: [id], onDelete: SetNull)
+
+  @@index([dictationId])
+  @@index([userId])
+  @@map("dictation_attempts")
+}
+
+// ------------------------------------------
+// UserProgress Model - Tiến độ học tập
+// ------------------------------------------
 model UserProgress {
   id             String    @id @default(uuid())
   userId         String    @map("user_id")
@@ -125,7 +218,8 @@ model UserProgress {
   proficiency    Int       @default(0) // Độ thành thạo: 0 (Mới) -> 5 (Master)
   nextReviewDate DateTime? @map("next_review_date") // Ngày AI nhắc học lại (Spaced Repetition)
   
-  // Lưu lịch sử tương tác: { "logs": [{ "date": "2024-01-01", "result": "forgot" }] }
+  // Lưu lịch sử tương tác
+  // Ví dụ: { "logs": [{ "date": "2024-01-01", "result": "forgot" }, { "date": "2024-01-02", "result": "remembered" }] }
   reviewHistory  Json?     @default("{}") @map("review_history")
   
   lastReviewedAt DateTime  @default(now()) @map("last_reviewed_at")
@@ -138,16 +232,46 @@ model UserProgress {
   @@map("user_progress")
 }
 
+// ------------------------------------------
+// Task Model - Nhiệm vụ học tập
+// ------------------------------------------
+model Task {
+  id          String    @id @default(uuid())
+  title       String    // Ví dụ: "Ôn tập bài IELTS Reading"
+  description String?
+  status      String    @default("TODO") // TODO, IN_PROGRESS, DONE
+  dueDate     DateTime? // Ngày phải làm
+  priority    String    @default("MEDIUM") // HIGH, MEDIUM, LOW
+  
+  // Quan hệ với User
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+
+  // Quan hệ với Resource (Liên kết ngược lại Resource)
+  // Task này sinh ra từ tài liệu nào?
+  resourceId  String?
+  resource    Resource? @relation(fields: [resourceId], references: [id])
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("tasks")
+}
+
+// ------------------------------------------
+// ActivityLog Model - Log hoạt động (cho Heatmap/Streak)
+// ------------------------------------------
 model ActivityLog {
   id        String   @id @default(uuid())
   userId    String   @map("user_id")
-  action    String   // e.g. "STUDY_SESSION", "ADD_VOCAB", "FOCUS_TIMER"
+  action    String   // Ví dụ: "STUDY_SESSION", "ADD_VOCAB", "FOCUS_TIMER", "DICTATION_COMPLETE"
   count     Int      @default(1)
-  date      DateTime @db.Date // Only stores the date for grouping (e.g. 2024-01-01)
+  date      DateTime @db.Date // Chỉ lưu ngày (ví dụ: 2024-01-01)
   createdAt DateTime @default(now()) @map("created_at")
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, action, date]) // Ensure one action type per user per day; use count for duplicates
+  // Đảm bảo mỗi user chỉ có 1 log cho mỗi action mỗi ngày
+  @@unique([userId, action, date])
   @@map("activity_logs")
 }

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { ArrowLeft, BookOpen, Clock, Layers, FileText, CheckCircle2, Volume2, Mic, Youtube } from 'lucide-react';
 import ShadowingPractice from '../components/ShadowingPractice';
+import { playTextToSpeech } from '../utils/speech';
 
 const ResourceDetail = () => {
     const { id } = useParams();
@@ -13,11 +14,7 @@ const ResourceDetail = () => {
 
     const playAudio = (text, e) => {
         if (e) e.stopPropagation();
-        if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'en-US';
-        utterance.rate = 0.9;
-        window.speechSynthesis.speak(utterance);
+        playTextToSpeech(text, 0.9);
     };
     useEffect(() => {
         const fetchDetail = async () => {

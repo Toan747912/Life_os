@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ModelSelector from '../components/learning/ModelSelector';
 import api from '../services/api';
 import { Save, Loader2, Sparkles, Settings as SettingsIcon } from 'lucide-react';
@@ -9,6 +9,16 @@ const Settings = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const timeoutRef = useRef(null);
+
+  const triggerSuccessToast = () => {
+    setShowSuccess(false); // Force re-render animation if already true
+    setTimeout(() => {
+      setShowSuccess(true);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => setShowSuccess(false), 3000);
+    }, 10);
+  };
 
   useEffect(() => {
     fetchData();
@@ -17,21 +27,29 @@ const Settings = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [modelsRes, prefsRes] = await Promise.all([
-        api.get('/learning/models'),
-        api.get('/user/preferences')
-      ]);
-      setModels(modelsRes.data.data);
+      // Fetch models
+      try {
+        const modelsRes = await api.get('/learning/models');
+        setModels(modelsRes.data.data);
+      } catch (error) {
+        console.error("Error fetching models:", error);
+      }
 
-      // Đảm bảo có giá trị mặc định nếu server chưa có
-      const serverPrefs = prefsRes.data.data || {};
-      setPreferences(prev => ({
-        ...prev,
-        ...serverPrefs,
-        defaultAiModel: serverPrefs.defaultAiModel || 'gemini-1.5-flash'
-      }));
-    } catch (error) {
-      console.error("Error fetching settings:", error);
+      // Fetch preferences
+      try {
+        const prefsRes = await api.get('/user/preferences');
+        const serverPrefs = prefsRes.data.data || {};
+        setPreferences(prev => ({
+          ...prev,
+          ...serverPrefs,
+          defaultAiModel: serverPrefs.defaultAiModel || 'gemini-1.5-flash'
+        }));
+      } catch (error) {
+        console.error("Error fetching preferences:", error);
+        if (error.response && error.response.status === 404) {
+          alert("Lỗi: Người dùng không tồn tại. Vui lòng đăng xuất và đăng nhập lại.");
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -44,8 +62,7 @@ const Settings = () => {
     // Auto-save logic cho AI Model để tránh người dùng quên bấm Save
     try {
       await api.patch('/user/preferences', updatedPrefs);
-      setShowSuccess(true);
-      setTimeout(() => setShowSuccess(false), 2000);
+      triggerSuccessToast();
     } catch (error) {
       console.error("Auto-save failed:", error);
     }
@@ -55,8 +72,7 @@ const Settings = () => {
     setSaving(true);
     try {
       await api.patch('/user/preferences', preferences);
-      setShowSuccess(true);
-      setTimeout(() => setShowSuccess(false), 3000);
+      triggerSuccessToast();
     } catch (error) {
       alert("Lỗi khi lưu cài đặt: " + error.message);
     } finally {

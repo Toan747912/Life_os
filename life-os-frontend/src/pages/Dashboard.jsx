@@ -3,7 +3,7 @@ import TaskList from '../components/tasks/TaskList';
 import api from '../services/api';
 import {
     Sparkles, Target, Zap, Play, Pause, RotateCcw,
-    Send, Loader2, Youtube, Type, PenTool, Flame, Calendar
+    Send, Loader2, Youtube, Type, PenTool, Flame, Calendar, UploadCloud
 } from 'lucide-react';
 import WritingPractice from '../components/WritingPractice';
 import { useAuth } from '../context/AuthContext';
@@ -17,6 +17,7 @@ const Dashboard = () => {
     // --- State cho AI Input ---
     const [inputType, setInputType] = useState('TEXT');
     const [inputValue, setInputValue] = useState('');
+    const [selectedFile, setSelectedFile] = useState(null);
     const [loadingAI, setLoadingAI] = useState(false);
     const [dueCount, setDueCount] = useState(0);
     const [dueItems, setDueItems] = useState([]);
@@ -25,6 +26,7 @@ const Dashboard = () => {
     const [userStats, setUserStats] = useState({ currentStreak: 0, longestStreak: 0, totalLearned: 0 });
     const [dailyQuests, setDailyQuests] = useState(null);
     const [heatmapData, setHeatmapData] = useState([]);
+    const [insights, setInsights] = useState(null);
 
     useEffect(() => {
         fetchDueCount();
@@ -33,14 +35,25 @@ const Dashboard = () => {
 
     const fetchHabitData = async () => {
         try {
-            const [statsRes, questsRes, heatmapRes] = await Promise.all([
-                api.get('/users/stats'),
-                api.get('/users/quests'),
-                api.get('/users/heatmap')
+            const [streakRes, questsRes, heatmapRes] = await Promise.all([
+                api.get('/activity/streak'),
+                api.get('/activity/quests'),
+                api.get('/activity/heatmap'),
             ]);
-            setUserStats(statsRes.data.data);
-            setDailyQuests(questsRes.data.data);
-            setHeatmapData(heatmapRes.data.data || []);
+
+            // Note: insights was mocked, we will leave it as null or handle it later
+
+            setUserStats({
+                currentStreak: streakRes.data.currentStreak,
+                longestStreak: streakRes.data.longestStreak,
+                totalLearned: 0 // Mocked for now, need another API to count items
+            });
+            setDailyQuests({
+                addVocab: questsRes.data.find(q => q.id === 1) || { current: 0, target: 10 },
+                studySession: questsRes.data.find(q => q.id === 2) || { current: 0, target: 3 }
+            });
+            setHeatmapData(heatmapRes.data || []);
+            setInsights(null); // Clear insights since no API yet
         } catch (error) {
             console.error("Error fetching habit data:", error);
         }
@@ -82,22 +95,50 @@ const Dashboard = () => {
 
     // Logic gọi AI phân tích
     const handleAnalyze = async () => {
-        if (!inputValue.trim()) return;
-        setLoadingAI(true);
-        try {
-            await api.post('/learning/analyze', {
-                type: inputType,
-                content: inputValue,
-                // Không gửi modelId sẽ dùng Model mặc định trong Settings
-                title: `${inputType} Insight - ${new Date().toLocaleDateString()}`
-            });
-            setInputValue('');
-            alert("✅ AI đã thêm task mới vào danh sách!");
-            window.location.reload(); // Reload trang để hiện task mới
-        } catch (error) {
-            alert("Lỗi AI: " + (error.response?.data?.error || error.message));
-        } finally {
-            setLoadingAI(false);
+        if (inputType === 'MEDIA') {
+            if (!selectedFile) {
+                alert("Vui lòng chọn một file âm thanh hoặc video!");
+                return;
+            }
+            setLoadingAI(true);
+            try {
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+                formData.append('type', 'MEDIA');
+                formData.append('title', `Media Insight - ${new Date().toLocaleDateString()}`);
+
+                // Gửi file bằng endpoint upload với header đúng
+                await api.post('/learning/upload', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+
+                setSelectedFile(null);
+                alert("✅ AI đã tiếp nhận file và bắt đầu phân tích! Vui lòng đợi trong giây lát hoặc kiểm tra Library sau.");
+                window.location.reload();
+            } catch (error) {
+                alert("Lỗi upload file: " + (error.response?.data?.error || error.message));
+            } finally {
+                setLoadingAI(false);
+            }
+        } else {
+            if (!inputValue.trim()) return;
+            setLoadingAI(true);
+            try {
+                await api.post('/learning/analyze', {
+                    type: inputType,
+                    content: inputValue,
+                    title: `${inputType} Insight - ${new Date().toLocaleDateString()}`
+                });
+                // activityService.log('ADD_VOCAB').catch(e => console.error(e));
+
+                setInputValue('');
+                alert("✅ AI đã phân tích xong và thêm từ vựng mới!");
+                window.location.reload(); // Reload trang để hiện task mới
+            } catch (error) {
+                alert("Lỗi AI: " + (error.response?.data?.error || error.message));
+            } finally {
+                setLoadingAI(false);
+            }
         }
     };
 
@@ -180,6 +221,59 @@ const Dashboard = () => {
                         </div>
                     </div>
 
+                    {/* --- Advanced Insights --- */}
+                    {insights && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
+                            {/* Weakest Words */}
+                            <div className="bg-white p-6 rounded-2xl border border-rose-200 shadow-sm">
+                                <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                    <Target size={20} className="text-rose-500" /> Needs Review (Weakest Points)
+                                </h2>
+                                <div className="space-y-3">
+                                    {insights.weakestWords.length > 0 ? insights.weakestWords.map((word, idx) => (
+                                        <div key={idx} className="flex justify-between items-center p-3 bg-rose-50 rounded-xl">
+                                            <div>
+                                                <p className="font-bold text-slate-800">{word.term}</p>
+                                                <p className="text-sm text-slate-500">{word.translation}</p>
+                                            </div>
+                                            <div className="text-xs font-bold text-rose-600 bg-rose-200 px-2 py-1 rounded-md">
+                                                Lvl {word.proficiency}
+                                            </div>
+                                        </div>
+                                    )) : <p className="text-sm text-slate-500">You don't have any weak words yet! Great job.</p>}
+                                </div>
+                            </div>
+
+                            {/* Learning Trend (Simple CSS Chart) */}
+                            <div className="bg-white p-6 rounded-2xl border border-indigo-200 shadow-sm">
+                                <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                    <Sparkles size={20} className="text-indigo-500" /> Learning Trend (Last 14 Days)
+                                </h2>
+                                <div className="flex items-end gap-2 h-40 mt-4 rounded-xl p-4 bg-slate-50">
+                                    {insights.wordsLearnedPerDay.length > 0 ? insights.wordsLearnedPerDay.slice(-14).map((day, idx) => {
+                                        const maxCount = Math.max(...insights.wordsLearnedPerDay.map(d => d.count), 1);
+                                        const heightPercent = (day.count / maxCount) * 100;
+                                        return (
+                                            <div key={idx} className="flex-1 flex flex-col items-center justify-end gap-2 group relative h-full">
+                                                <div
+                                                    className="w-full bg-indigo-500 rounded-t-md transition-all group-hover:bg-indigo-400 relative"
+                                                    style={{ height: `${heightPercent}%`, minHeight: '4px' }}
+                                                >
+                                                    <span className="absolute -top-7 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 font-bold">
+                                                        {day.count}
+                                                    </span>
+                                                </div>
+                                                <span className="text-[10px] text-slate-400 font-medium">
+                                                    {day.date.split('-')[2]}/{day.date.split('-')[1]}
+                                                </span>
+                                            </div>
+                                        );
+                                    }) : <p className="text-sm text-slate-500 w-full text-center my-auto">No data to display yet.</p>}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* --- 1. KHU VỰC NHẬP LIỆU AI --- */}
                     <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
                         <div className="flex justify-between items-center">
@@ -207,26 +301,55 @@ const Dashboard = () => {
                                 >
                                     <Youtube size={16} /> YouTube
                                 </button>
+                                <button
+                                    onClick={() => { setInputType('MEDIA'); setInputValue(''); }}
+                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
+                                        ${inputType === 'MEDIA' ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500 hover:text-slate-700'}
+                                    `}
+                                >
+                                    <UploadCloud size={16} /> Upload Audio/Video
+                                </button>
                             </div>
 
-                            {/* Ô nhập liệu */}
+                            {/* Ô nhập liệu / Upload */}
                             <div className="relative">
-                                <input
-                                    type="text"
-                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 pr-12 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium"
-                                    placeholder={inputType === 'YOUTUBE' ? "Dán link video YouTube vào đây..." : "Nhập nội dung bạn muốn học..."}
-                                    value={inputValue}
-                                    onChange={(e) => setInputValue(e.target.value)}
-                                    onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
-                                    disabled={loadingAI}
-                                />
-                                <button
-                                    onClick={handleAnalyze}
-                                    disabled={loadingAI || !inputValue}
-                                    className="absolute right-2 top-2 p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                                >
-                                    {loadingAI ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-                                </button>
+                                {inputType === 'MEDIA' ? (
+                                    <div className="flex items-center gap-4">
+                                        <input
+                                            type="file"
+                                            accept="audio/*, video/*"
+                                            onChange={(e) => setSelectedFile(e.target.files[0])}
+                                            disabled={loadingAI}
+                                            className="w-full text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition-all border border-slate-200 rounded-xl bg-slate-50 p-2 focus:outline-none"
+                                        />
+                                        <button
+                                            onClick={handleAnalyze}
+                                            disabled={loadingAI || !selectedFile}
+                                            className="p-3 whitespace-nowrap bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition-colors font-medium text-sm flex items-center justify-center gap-2"
+                                        >
+                                            {loadingAI ? <Loader2 size={18} className="animate-spin" /> : <><UploadCloud size={18} /> Upload & Analyze</>}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <input
+                                            type="text"
+                                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 pr-12 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium"
+                                            placeholder={inputType === 'YOUTUBE' ? "Dán link video YouTube vào đây..." : "Nhập nội dung bạn muốn học..."}
+                                            value={inputValue}
+                                            onChange={(e) => setInputValue(e.target.value)}
+                                            onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
+                                            disabled={loadingAI}
+                                        />
+                                        <button
+                                            onClick={handleAnalyze}
+                                            disabled={loadingAI || !inputValue}
+                                            className="absolute right-2 top-2 p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                                        >
+                                            {loadingAI ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+                                        </button>
+                                    </>
+                                )}
                             </div>
                         </div>
                     </div>

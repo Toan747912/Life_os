@@ -7,6 +7,10 @@ const getPreferences = async (req, res) => {
         const preferences = await userService.getPreferences(userId);
         res.json({ data: preferences });
     } catch (error) {
+        console.error("Error in getPreferences:", error);
+        if (error.message === 'User not found') {
+            return res.status(404).json({ error: "Người dùng không tồn tại. Vui lòng đăng xuất và đăng nhập lại." });
+        }
         res.status(500).json({ error: error.message });
     }
 };
@@ -52,10 +56,21 @@ const getHeatmap = async (req, res) => {
     }
 };
 
+const getUserInsights = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const insights = await userService.getUserInsights(userId);
+        res.json({ data: insights });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
 module.exports = {
     getPreferences,
     updatePreferences,
     getQuests,
     getUserStats,
-    getHeatmap
+    getHeatmap,
+    getUserInsights
 };

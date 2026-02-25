@@ -10,47 +10,81 @@ const habitService = require('./habit.service');
  * @param {String} textContent - Nội dung văn bản cần học
  * @param {String} sourceUrl - URL gốc (VD: Link YouTube)
  */
-const createLearningResource = async (userId, textContent, title, modelId = null, sourceUrl = null) => {
+const createLearningResource = async (userId, textContent, title, modelId = null, sourceUrl = null, type = 'TEXT') => {
   try {
     // 1. Gọi AI phân tích
-    console.log(`🤖 [1/3] Đang gửi cho Gemini phân tích (Model: ${modelId || 'default'})...`);
-    const aiResult = await analyzeTextWithGemini(textContent, modelId);
+    let aiResult;
+    if (type === 'MEDIA') {
+      console.log(`🤖 [1/3] Đang gửi Media cho Gemini File AI (Model: ${modelId || 'default'})...`);
+      const { analyzeMediaWithGemini } = require('./ai.service');
+      aiResult = await analyzeMediaWithGemini(textContent, modelId);
+
+      // Do not clean up the temporary file, we need it for playback
+      // const fs = require('fs');
+      // if (fs.existsSync(textContent)) {
+      //   fs.unlinkSync(textContent);
+      // }
+    } else {
+      console.log(`🤖 [1/3] Đang gửi cho Gemini phân tích (Model: ${modelId || 'default'})...`);
+      aiResult = await analyzeTextWithGemini(textContent, modelId);
+    }
 
     // Validate dữ liệu từ AI tránh lỗi null
     const vocabList = Array.isArray(aiResult.vocabularyList) ? aiResult.vocabularyList : [];
+    const sentenceList = Array.isArray(aiResult.sentences) ? aiResult.sentences : [];
+
+    // Chuẩn bị mảng LearningItems (bao gồm cả Vocab và Sentence)
+    const learningItemsData = [
+      // 1. Phân tích từ vựng
+      ...vocabList.map(item => ({
+        term: item.word || item.term || "Unknown word",
+        definition: item.definition || "",
+        exampleSentence: item.example || "",
+        type: "VOCABULARY",
+        extraInfo: {
+          ipa: item.ipa || "",
+          synonyms: item.synonyms || [],
+          timestamp: item.timestamp || null
+        }
+      })),
+      // 2. Phân tích câu thoại (dành cho Dictation)
+      ...sentenceList.map(sentence => ({
+        // Lưu tên hiển thị ngắn gọn cho term, VD: "[Câu thoại] Hello world..."
+        term: `[Câu thoại] ${sentence.text ? sentence.text.substring(0, 30) : ''}...`,
+        definition: sentence.translation || "",
+        exampleSentence: sentence.text || "", // QUAN TRỌNG: Đây là câu gốc để Dictation kiểm tra
+        type: "SENTENCE",
+        extraInfo: {
+          timestamp: sentence.timestamp || null
+        }
+      }))
+    ];
 
     // 2. Dùng Transaction để đảm bảo tính toàn vẹn dữ liệu
     console.log("💾 [2/3] Đang lưu vào Database...");
 
     const result = await prisma.$transaction(async (tx) => {
-
       // A. Tạo Resource và LearningItems cùng lúc
-      // Prisma hỗ trợ Nested Write (ghi lồng nhau) rất mạnh
+      const path = require('path');
+      const relativeFilePath = type === 'MEDIA' ? `uploads/${path.basename(textContent)}` : null;
+
       const newResource = await tx.resource.create({
         data: {
           userId: userId,
           title: title,
-          type: sourceUrl && sourceUrl.includes('youtube.com') || sourceUrl && sourceUrl.includes('youtu.be') ? "YOUTUBE" : "TEXT",
-          rawContent: textContent,
+          type: type === 'MEDIA' ? "AUDIO" : (sourceUrl && (sourceUrl.includes('youtube.com') || sourceUrl.includes('youtu.be')) ? "YOUTUBE" : "TEXT"),
+          filePath: relativeFilePath,
+          rawContent: type === 'MEDIA' ? "Media File Analysis" : textContent,
           aiMetadata: {
             summary: aiResult.summary || "No summary",
             difficulty: aiResult.difficulty || "Medium",
             keywords: aiResult.keywords || [],
             vocabularyList: vocabList,
+            sentences: sentenceList, // Lưu thêm vào metadata để tracking
             sourceUrl: sourceUrl
           },
           learningItems: {
-            create: vocabList.map(item => ({
-              term: item.word || item.term,
-              definition: item.definition,
-              exampleSentence: item.example,
-              type: "VOCABULARY",
-              extraInfo: {
-                ipa: item.ipa,
-                synonyms: item.synonyms,
-                timestamp: item.timestamp
-              }
-            }))
+            create: learningItemsData
           }
         },
         include: {
@@ -138,6 +172,31 @@ const getDueItems = async (userId) => {
       userId,
       nextReviewDate: {
         lte: today // Lấy các từ đến hạn hoặc quá hạn
+      },
+      item: {
+        type: 'VOCABULARY' // Chỉ lấy Vocabulary cho tính năng Flashcard cũ
+      }
+    },
+    include: {
+      item: {
+        include: {
+          resource: true
+        }
+      }
+    }
+  });
+};
+
+const getDueDictationSentences = async (userId) => {
+  const today = new Date();
+  return await prisma.userProgress.findMany({
+    where: {
+      userId,
+      nextReviewDate: {
+        lte: today
+      },
+      item: {
+        type: 'SENTENCE' // Lọc riêng Sentence cho tính năng Dictation
       }
     },
     include: {
@@ -208,11 +267,36 @@ const evaluateWritingPractice = async (userId, text, targetWords, modelId = null
   }
 };
 
+const submitDictationAttempt = async (userId, learningItemId, progressId, userInput, originalText, isCorrect) => {
+  // 1. Lưu lại lịch sử gõ
+  const attempt = await prisma.dictationAttempt.create({
+    data: {
+      userId,
+      learningItemId,
+      originalText,
+      userInput,
+      accuracyScore: isCorrect ? 1.0 : 0.0 // Có thể lưu score tỷ lệ % sau này, backend quyết định
+    }
+  });
+
+  // 2. Cập nhật tiến trình học SRS
+  // nếu đúng -> remembered (tăng khoảng cách ôn tập)
+  // nếu sai  -> forgot (gõ lại càng sớm càng tốt)
+  const updatedProgress = await updateReviewProgress(userId, progressId, isCorrect ? 'remembered' : 'forgot');
+
+  // Ghi nhận habit (Optional)
+  await habitService.logActivity(userId, 'DICTATION_PRACTICE');
+
+  return { updatedProgress, attempt };
+};
+
 module.exports = {
   createLearningResource,
   getAllResources,
   getResourceById,
   getDueItems,
+  getDueDictationSentences,
   updateReviewProgress,
+  submitDictationAttempt,
   evaluateWritingPractice
 };
