@@ -16,7 +16,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB max
+    limits: { fileSize: 5120 * 1024 * 1024 } // 5GB max
 });
 
 // Tất cả routes đều cần auth

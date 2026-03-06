@@ -511,6 +511,181 @@ Instructions for your response:
 
     return "Hệ thống AI đang gặp lỗi hoặc quá tải. Hãy thử tự so sánh câu của bạn với đáp án nhé!";
   }
+
+  async generateFlashcardData(keyword, modelId = null) {
+    const modelsToTry = modelId
+      ? [modelId, ...this.fallbackModels.filter(m => m !== modelId)]
+      : this.fallbackModels;
+
+    for (const selectedModelId of modelsToTry) {
+      try {
+        let modelName = selectedModelId;
+        if (modelName.startsWith('models/')) {
+          modelName = modelName.replace('models/', '');
+        }
+
+        console.log(`✨ Attempting Magic Dictionary with model: ${modelName} for keyword: "${keyword}"`);
+
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: this.generationConfig
+        });
+
+        const prompt = `
+Bạn là một chuyên gia ngôn ngữ học xuất sắc. Người dùng đang muốn học từ vựng: '${keyword}'.
+Hãy phân tích từ này và trả về ĐÚNG định dạng JSON sau (Tuyệt đối không bọc bằng markdown \`\`\`json):
+{
+  "word": "Từ gốc",
+  "phonetic": "Phiên âm quốc tế (IPA) hoặc Pinyin",
+  "hanViet": "Âm Hán Việt (chỉ trả về nếu là tiếng Trung, nếu tiếng Anh thì để null)",
+  "meaning": "Nghĩa tiếng Việt ngắn gọn, chuẩn xác nhất",
+  "partOfSpeech": "Từ loại (Danh từ, Động từ...)",
+  "exampleSentence": "1 câu ví dụ minh họa thực tế, thông dụng nhất",
+  "exampleTranslation": "Bản dịch nghĩa của câu ví dụ",
+  "contextualNuance": "GIẢI THÍCH CHUYÊN SÂU: Phân tích sự khác biệt của từ này so với từ đồng nghĩa dễ nhầm lẫn nhất (Ví dụ: khác biệt giữa 不 và 没). Hãy giải thích thật ngắn gọn, dễ hiểu và thực tế.",
+  "synonyms": ["từ đồng nghĩa 1", "từ đồng nghĩa 2"],
+  "antonyms": ["từ trái nghĩa 1", "từ trái nghĩa 2"],
+  "collocations": ["cụm từ đi kèm 1", "cụm từ đi kèm 2"],
+  "wordFamily": ["dạng từ khác 1", "dạng từ khác 2"]
+}
+        `;
+
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const textResponse = response.text();
+
+        // Luôn clear markdown backticks vì đôi khi AI vẫn ném vào dù đã dặn
+        const cleanedText = textResponse.replace(/^```json\s*/im, '').replace(/```\s*$/im, '').trim();
+        const jsonData = JSON.parse(cleanedText);
+
+        this.modelHealth[modelName] = { status: 'ok', reason: null, lastTried: new Date() };
+
+        return jsonData;
+
+      } catch (error) {
+        console.error(`⚠️ AI Service Error (Magic Dictionary, Model: ${selectedModelId}):`, error.message);
+        if (error.message.includes('Quota')) {
+          continue;
+        }
+        break;
+      }
+    }
+
+    throw new Error("Hệ thống AI đang quá tải hoặc gặp lỗi khi tạo flashcard. Vui lòng thử lại sau.");
+  }
+
+  async generateStory(words, difficulty = 'B1', modelId = null) {
+    const modelsToTry = modelId
+      ? [modelId, ...this.fallbackModels.filter(m => m !== modelId)]
+      : this.fallbackModels;
+
+    for (const selectedModelId of modelsToTry) {
+      try {
+        let modelName = selectedModelId.replace('models/', '');
+        const model = genAI.getGenerativeModel({ model: modelName, generationConfig: this.generationConfig });
+
+        const prompt = `
+          Bạn là một giáo viên tiếng Anh chuyên nghiệp. Hãy viết một câu chuyện ngắn thú vị (khoảng 150-250 từ) 
+          ở trình độ ${difficulty} sử dụng TẤT CẢ các từ vựng sau:
+          [${words.join(', ')}]
+          
+          Yêu cầu output (JSON schema tĩnh):
+          {
+            "title": "Tiêu đề truyện",
+            "content": "Nội dung truyện tiếng Anh, bôi đậm (dùng thẻ <b>) các từ vựng được yêu cầu",
+            "translation": "Bản dịch tiếng Việt của truyện",
+            "usedWords": ["Danh sách các từ đã dùng"]
+          }
+        `;
+        const result = await model.generateContent(prompt);
+        const textResponse = (await result.response).text();
+        const cleanedText = textResponse.replace(/^```json\s*/im, '').replace(/```\s*$/im, '').trim();
+        return JSON.parse(cleanedText);
+      } catch (error) {
+        if (error.message.includes('Quota')) continue;
+        break;
+      }
+    }
+    throw new Error("Không thể sinh truyện lúc này.");
+  }
+
+  async generateInsight(userData, modelId = null) {
+    const modelsToTry = modelId
+      ? [modelId, ...this.fallbackModels.filter(m => m !== modelId)]
+      : this.fallbackModels;
+
+    for (const selectedModelId of modelsToTry) {
+      try {
+        let modelName = selectedModelId.replace('models/', '');
+        const model = genAI.getGenerativeModel({ model: modelName, generationConfig: this.generationConfig });
+
+        const prompt = `
+          Bạn là một Mentor AI phân tích dữ liệu học tập của học viên tiếng Anh.
+          Dưới đây là một số dữ liệu thống kê gần đây của học viên:
+          ${JSON.stringify(userData, null, 2)}
+          
+          Hãy đưa ra 1 "Insight" (Lời khuyên/Phân tích) thật sâu sắc, có tính xây dựng, cá nhân hóa. Nhận xét về những điểm họ làm tốt và những điểm cần cải thiện, sau đó đưa ra 1 action nhỏ để họ làm luôn trong ngày hôm nay.
+          
+          Yêu cầu output (JSON schema tĩnh):
+          {
+            "title": "Tiêu đề ngắn gọn của lời khuyên",
+            "content": "Nội dung lời khuyên bằng tiếng Việt",
+            "category": "Motivation hoặc Strategy hoặc Correction",
+            "tags": ["danh sách", "gắn tag"]
+          }
+        `;
+        const result = await model.generateContent(prompt);
+        const textResponse = (await result.response).text();
+        const cleanedText = textResponse.replace(/^```json\s*/im, '').replace(/```\s*$/im, '').trim();
+        return JSON.parse(cleanedText);
+      } catch (error) {
+        if (error.message.includes('Quota')) continue;
+        break;
+      }
+    }
+    throw new Error("Không thể sinh Insight lúc này.");
+  }
+
+  async generateCloze(sentences, modelId = null) {
+    const modelsToTry = modelId
+      ? [modelId, ...this.fallbackModels.filter(m => m !== modelId)]
+      : this.fallbackModels;
+
+    for (const selectedModelId of modelsToTry) {
+      try {
+        let modelName = selectedModelId.replace('models/', '');
+        const model = genAI.getGenerativeModel({ model: modelName, generationConfig: this.generationConfig });
+
+        const prompt = `
+          Bạn là giáo viên tiếng Anh. Từ các câu ví dụ sau đây, hãy tạo ra bài tập điền từ vào chỗ trống (Cloze test).
+          Mỗi câu hãy đục lỗ 1 từ quan trọng nhất. Cung cấp câu bị đục lỗ (thay từ bằng "___"), đáp án đúng và 3 đáp án nhiễu.
+          
+          Danh sách câu:
+          ${sentences.map((s, i) => `${i + 1}. ${s}`).join('\n')}
+          
+          Yêu cầu output (JSON schema tĩnh):
+          {
+            "questions": [
+              {
+                "question": "Câu có chỗ trống",
+                "options": ["đáp án 1", "đáp án 2", "đáp án 3", "đáp án 4"],
+                "correctAnswer": "đáp án đúng",
+                "explanation": "Giải thích ngắn gọn bằng tiếng Việt"
+              }
+            ]
+          }
+        `;
+        const result = await model.generateContent(prompt);
+        const textResponse = (await result.response).text();
+        const cleanedText = textResponse.replace(/^```json\s*/im, '').replace(/```\s*$/im, '').trim();
+        return JSON.parse(cleanedText);
+      } catch (error) {
+        if (error.message.includes('Quota')) continue;
+        break;
+      }
+    }
+    throw new Error("Không thể sinh bài tập lúc này.");
+  }
 }
 
 const aiService = new AIService();
@@ -531,8 +706,39 @@ const evaluateDictationWithGemini = async (originalText, userInput, accuracyScor
   return await aiService.evaluateDictation(originalText, userInput, accuracyScore, modelId);
 };
 
+const generateFlashcardDataWithGemini = async (keyword, modelId) => {
+  return await aiService.generateFlashcardData(keyword, modelId);
+};
+
 const getAvailableModels = async () => {
   return await aiService.listModels();
 };
 
-module.exports = { analyzeTextWithGemini, analyzeMediaWithGemini, evaluateWritingWithGemini, getAvailableModels, evaluateDictationWithGemini };
+const generateStoryWithGemini = async (words, difficulty, modelId) => {
+  return await aiService.generateStory(words, difficulty, modelId);
+};
+
+const generateClozeWithGemini = async (sentences, modelId) => {
+  return await aiService.generateCloze(sentences, modelId);
+};
+
+const generateRoleplayResponseWithGemini = async (messages, context, modelId) => {
+  return await aiService.generateRoleplayResponse(messages, context, modelId);
+};
+
+const generateInsightWithGemini = async (userData, modelId) => {
+  return await aiService.generateInsight(userData, modelId);
+};
+
+module.exports = {
+  analyzeTextWithGemini,
+  analyzeMediaWithGemini,
+  evaluateWritingWithGemini,
+  getAvailableModels,
+  evaluateDictationWithGemini,
+  generateFlashcardDataWithGemini,
+  generateStoryWithGemini,
+  generateClozeWithGemini,
+  generateRoleplayResponseWithGemini,
+  generateInsightWithGemini
+};

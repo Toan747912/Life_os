@@ -7,6 +7,8 @@ const learningController = require('../controllers/learning.controller');
 
 
 router.post('/analyze', learningController.analyzeAndSave);
+router.post('/quick-add', learningController.quickAdd);
+router.post('/lookup', learningController.lookup);
 
 router.get('/', learningController.getResources);
 router.get('/today-reviews', learningController.getTodayReviews);
@@ -38,7 +40,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage: storage,
-    limits: { fileSize: 50 * 1024 * 1024 } // Giới hạn 50MB
+    limits: { fileSize: 5120 * 1024 * 1024 } // Giới hạn 5GB
 });
 
 router.post('/upload', upload.single('file'), learningController.analyzeAndSave);

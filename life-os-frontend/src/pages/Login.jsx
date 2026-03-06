@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { authService } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import { Brain, Lock, Mail, ArrowRight, Loader2 } from 'lucide-react';
 
 const Login = () => {
@@ -9,6 +10,8 @@ const Login = () => {
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const navigate = useNavigate();
+    const location = useLocation();
+    const { login } = useAuth();
 
     const handleLogin = async (e) => {
         e.preventDefault();
@@ -19,13 +22,12 @@ const Login = () => {
             const response = await authService.login(email, password);
             const { token, user } = response.data;
 
-            // Lưu token và thông tin user
-            localStorage.setItem('token', token);
-            localStorage.setItem('userId', user.id);
-            localStorage.setItem('user', JSON.stringify(user));
+            // Cập nhật AuthContext (đồng thời lưu vào localStorage)
+            login(token, user);
 
-            // Chuyển hướng về trang chủ
-            navigate('/');
+            // Redirect về trang user muốn vào, hoặc về Dashboard
+            const from = location.state?.from?.pathname || '/';
+            navigate(from, { replace: true });
         } catch (err) {
             setError(err.response?.data?.error || 'Đăng nhập thất bại.');
         } finally {

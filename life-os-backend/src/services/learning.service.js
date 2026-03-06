@@ -290,6 +290,77 @@ const submitDictationAttempt = async (userId, learningItemId, progressId, userIn
   return { updatedProgress, attempt };
 };
 
+const quickAddVocabulary = async (userId, keyword, modelId = null) => {
+  try {
+    const { generateFlashcardDataWithGemini } = require('./ai.service');
+    console.log(`✨ [1/3] Gửi keyword "${keyword}" cho AI tạo Flashcard...`);
+
+    // Gọi Gemini AI với System Prompt đặc biệt cho Magic Dictionary
+    const flashcardData = await generateFlashcardDataWithGemini(keyword, modelId);
+
+    console.log(`💾 [2/3] Lưu Flashcard từ khóa "${flashcardData.word}" vào database...`);
+
+    // Lưu vào Database với Prisma (tương tự LearningItem)
+    const result = await prisma.$transaction(async (tx) => {
+      const newLearningItem = await tx.learningItem.create({
+        data: {
+          userId: userId, // Liên kết item với user
+          term: flashcardData.word || keyword,
+          type: "VOCABULARY",
+          definition: flashcardData.meaning || "",
+          exampleSentence: flashcardData.exampleSentence || "",
+          extraInfo: {
+            phonetic: flashcardData.phonetic || "",
+            hanViet: flashcardData.hanViet || null,
+            partOfSpeech: flashcardData.partOfSpeech || "",
+            exampleTranslation: flashcardData.exampleTranslation || "",
+            contextualNuance: flashcardData.contextualNuance || "",
+            synonyms: flashcardData.synonyms || [],
+            antonyms: flashcardData.antonyms || [],
+            collocations: flashcardData.collocations || [],
+            wordFamily: flashcardData.wordFamily || []
+          }
+        }
+      });
+
+      const now = new Date();
+      // Khởi tạo tiến trình học ngay lập tức để học viên có thể học ngay
+      const progress = await tx.userProgress.create({
+        data: {
+          userId: userId,
+          itemId: newLearningItem.id,
+          proficiency: 0,
+          nextReviewDate: now
+        }
+      });
+
+      // Update User Habit cho hành động Quick Add
+      await habitService.logActivity(userId, 'QUICK_ADD_VOCAB');
+
+      return { learningItem: newLearningItem, progress };
+    });
+
+    console.log(`✅ [3/3] Xong Quick Add cho keyword: ${keyword}`);
+    // Trả về LearningItem đã được gắn định dạng Flashcard
+    return result.learningItem;
+  } catch (error) {
+    console.error("❌ Lỗi quy trình quickAddVocabulary:", error);
+    throw error;
+  }
+};
+
+const lookupVocabulary = async (keyword, modelId = null) => {
+  try {
+    const { generateFlashcardDataWithGemini } = require('./ai.service');
+    console.log(`✨ [Lookup] Tra cứu keyword: "${keyword}"...`);
+    const flashcardData = await generateFlashcardDataWithGemini(keyword, modelId);
+    return flashcardData; // Không lưu vào DB, trả về ngay kết quả JSON
+  } catch (error) {
+    console.error("❌ Lỗi quy trình lookupVocabulary:", error);
+    throw error;
+  }
+};
+
 module.exports = {
   createLearningResource,
   getAllResources,
@@ -298,5 +369,7 @@ module.exports = {
   getDueDictationSentences,
   updateReviewProgress,
   submitDictationAttempt,
-  evaluateWritingPractice
+  evaluateWritingPractice,
+  quickAddVocabulary,
+  lookupVocabulary
 };

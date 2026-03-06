@@ -15,6 +15,18 @@ const SpeechInput = ({
     const [isSupported, setIsSupported] = useState(true);
     const [transcript, setTranscript] = useState('');
     const [error, setError] = useState(null);
+    const silenceTimeoutRef = useRef(null);
+
+    const resetSilenceTimeout = () => {
+        if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current);
+        }
+        if (isRecording) {
+            silenceTimeoutRef.current = setTimeout(() => {
+                setIsRecording(false);
+            }, 5000);
+        }
+    };
 
     // Khởi tạo Speech Recognition
     useEffect(() => {
@@ -47,6 +59,9 @@ const SpeechInput = ({
             const fullTranscript = (transcript + ' ' + finalTranscript).trim();
             setTranscript(fullTranscript);
             onTranscript(fullTranscript);
+
+            // Reset the silence timeout whenever we hear something
+            resetSilenceTimeout();
         };
 
         // Xử lý lỗi
@@ -92,6 +107,7 @@ const SpeechInput = ({
             try {
                 recognitionRef.current.start();
                 setError(null);
+                resetSilenceTimeout();
             } catch (e) {
                 console.error('Error starting recognition:', e);
                 // Có thể đã đang chạy
@@ -99,12 +115,20 @@ const SpeechInput = ({
                     recognitionRef.current.stop();
                     setTimeout(() => {
                         recognitionRef.current?.start();
+                        resetSilenceTimeout();
                     }, 100);
                 }
             }
         } else {
             recognitionRef.current?.stop();
+            if (silenceTimeoutRef.current) {
+                clearTimeout(silenceTimeoutRef.current);
+            }
         }
+
+        return () => {
+            if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current);
+        };
     }, [isRecording, isSupported]);
 
     // Cập nhật language khi thay đổi
@@ -135,8 +159,9 @@ const SpeechInput = ({
 
     if (!isSupported) {
         return (
-            <div className="text-gray-400 text-sm italic">
-                ⚠️ Trình duyệt không hỗ trợ nhập bằng giọng nói
+            <div className="text-slate-400 text-sm italic font-medium flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/0000.svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><path d="M12 9v4" /><path d="M12 17h.01" /></svg>
+                Trình duyệt không hỗ trợ nhập bằng giọng nói
             </div>
         );
     }
@@ -144,18 +169,19 @@ const SpeechInput = ({
     return (
         <div className="relative">
             {error && (
-                <div className="mb-2 p-2 bg-red-50 text-red-600 text-sm rounded-lg">
+                <div className="mb-3 p-3 bg-rose-50/80 backdrop-blur-sm border border-rose-100 text-rose-600 text-sm rounded-xl flex items-center gap-2 shadow-sm font-medium">
+                    <svg xmlns="http://www.w3.org/0000.svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
                     {error}
                 </div>
             )}
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 relative">
                 <button
                     type="button"
                     onClick={() => setIsRecording(!isRecording)}
-                    className={`p-3 rounded-full transition-all ${isRecording
-                            ? 'bg-red-500 text-white animate-pulse'
-                            : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                    className={`p-3.5 rounded-full transition-all duration-300 ${isRecording
+                        ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/30 animate-pulse-slow'
+                        : 'bg-white border-2 border-slate-200 text-slate-500 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 shadow-sm'
                         }`}
                     title={isRecording ? 'Tắt micro' : 'Bật micro'}
                 >
@@ -175,7 +201,7 @@ const SpeechInput = ({
                         value={transcript}
                         readOnly
                         placeholder={placeholder}
-                        className="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-gray-700 focus:outline-none"
+                        className="w-full px-5 py-3.5 bg-white/60 backdrop-blur-md border border-slate-200/80 rounded-2xl text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-sm font-medium"
                     />
                 </div>
 
@@ -183,21 +209,21 @@ const SpeechInput = ({
                     <button
                         type="button"
                         onClick={handleClear}
-                        className="p-2 text-gray-400 hover:text-gray-600 transition"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-colors"
                         title="Xóa"
                     >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                            <path d="M18 6 6 18M6 6l12 12" />
                         </svg>
                     </button>
                 )}
             </div>
 
             {isRecording && (
-                <div className="mt-2 flex items-center gap-2 text-sm text-red-500">
-                    <span className="relative flex h-2 w-2">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                <div className="mt-3 flex items-center gap-2.5 text-sm text-rose-500 font-bold bg-rose-50/50 inline-flex px-3 py-1.5 rounded-full border border-rose-100/50">
+                    <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
                     </span>
                     <span>Đang nghe... Hãy nói nội dung bạn nghe được</span>
                 </div>

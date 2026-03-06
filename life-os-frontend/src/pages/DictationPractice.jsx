@@ -1,152 +1,427 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
-import { dictationApi } from '../services/api';
-import { calculateLevenshtein, getAccuracyBadge } from '../components/dictation/DictationHelpers';
-import SpeechInput from '../components/dictation/SpeechInput';
+import { useParams, useNavigate } from 'react-router-dom';
+import DictationSettingsModal from '../components/dictation/DictationSettingsModal';
 
-const getFullMediaUrl = (url) => {
-    if (!url) return '';
-    if (url.startsWith('http') || url.startsWith('blob:') || url.startsWith('data:')) return url;
+import { useDictationData } from '../hooks/useDictationData';
+import { useDictationSettings } from '../hooks/useDictationSettings';
+import { useDictationProgress } from '../hooks/useDictationProgress';
 
-    const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000/api').replace('/api', '');
+import VideoPlayerSection from '../components/dictation/VideoPlayerSection';
+import DictationTab from '../components/dictation/DictationTab';
+import LearningTab from '../components/dictation/LearningTab';
+import DictationSummary from '../components/dictation/DictationSummary';
+import FixedDictionary from '../components/dictation/FixedDictionary';
 
-    // Ensure baseUrl has a trailing slash and url doesn't have a leading slash
-    const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
-    const cleanUrl = url.startsWith('/') ? url.substring(1) : url;
-
-    // Convert to array of parts, encode each part, then join
-    // This correctly handles spaces (%20) while preserving slashes (/)
-    const encodedPath = cleanUrl.split('/').map(part => encodeURIComponent(part)).join('/');
-
-    // Remove any unintended double slashes (except in http://)
-    const finalUrl = `${cleanBaseUrl}${encodedPath}`.replace(/([^:]\/)\/+/g, "$1");
-
-    return finalUrl;
-};
+import { calculateLevenshtein, analyzeWrongWords } from '../components/dictation/DictationHelpers';
 
 const DictationPractice = () => {
     const { id: dictationId } = useParams();
-    // States
-    const [dictation, setDictation] = useState(null);
-    const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
-    const [userInput, setUserInput] = useState('');
-    const [showHint, setShowHint] = useState(false);
-    const [showOriginal, setShowOriginal] = useState(false);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [playbackSpeed, setPlaybackSpeed] = useState(1);
-    const [results, setResults] = useState(null);
-    const [isRecording, setIsRecording] = useState(false);
-    const [startTime, setStartTime] = useState(null);
-    const [loading, setLoading] = useState(true);
 
+    // 1. Data Hook
+    const {
+        dictation, loading, sentences, blankConfigs,
+        cleanAudioUrl, isYouTubeUrl, getFullMediaUrl
+    } = useDictationData(dictationId);
+
+    // 2. Settings Hook
+    const { settings, setSettings } = useDictationSettings();
+
+    // 3. Progress Hook
+    const {
+        currentSentenceIndex, setCurrentSentenceIndex,
+        sentenceResults, userInput, currentResult,
+        isSentenceCompleted, currentSentence,
+        handleUserInputChange, submitAttempt, handleReset
+    } = useDictationProgress(dictationId, dictation, sentences);
+
+    // Tabs & Pagination
+    const [activeTab, setActiveTab] = useState('dictation');
+    const [itemsPerPage, setItemsPerPage] = useState(50);
+    const [currentPageDictation, setCurrentPageDictation] = useState(1);
+    const [currentPageLearning, setCurrentPageLearning] = useState(1);
+
+    // Learning / Blanks States
+    const [selectedWord, setSelectedWord] = useState(null);
+    const [isLooping, setIsLooping] = useState(false);
+    const [blankAnswers, setBlankAnswers] = useState({});
+    const [showBlankHints, setShowBlankHints] = useState({});
+    const [shadowingIndex, setShadowingIndex] = useState(null);
+    const [shadowScores, setShadowScores] = useState({});
+    const [isShadowRecording, setIsShadowRecording] = useState(false);
+    const [shadowTranscript, setShadowTranscript] = useState('');
+
+    // Dictation UI States
+    const [showHint, setShowHint] = useState(false);
+    const [revealedChars, setRevealedChars] = useState(0);
+    const [showOriginal, setShowOriginal] = useState(false);
+    const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const [showSummary, setShowSummary] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [startTime, setStartTime] = useState(null);
+
+    // Player States
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [playbackRate, setPlaybackRate] = useState(1);
+    const [isPlayerReady, setIsPlayerReady] = useState(false);
+    const [hasStarted, setHasStarted] = useState(false);
+
+    // Refs
     const playerRef = useRef(null);
     const inputRef = useRef(null);
+    const resultsRef = useRef(null);
+    const sentenceListRef = useRef(null);
+    const replayCountRef = useRef(0);
+    const replayTimeoutRef = useRef(null);
+    const isWaitingNextSentenceRef = useRef(false);
 
-    // Load dictation data
-    useEffect(() => {
-        loadDictation();
-    }, [dictationId]);
+    // Derived pagination
+    const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(sentences.length / itemsPerPage);
+    const currentSentencesDictation = itemsPerPage === 'all'
+        ? sentences
+        : sentences.slice((currentPageDictation - 1) * itemsPerPage, currentPageDictation * itemsPerPage);
+    const currentSentencesLearning = itemsPerPage === 'all'
+        ? sentences
+        : sentences.slice((currentPageLearning - 1) * itemsPerPage, currentPageLearning * itemsPerPage);
 
-    // Set start time when user starts typing
+    // Set startTime when typing starts
     useEffect(() => {
-        if (userInput && !startTime) {
+        if (userInput && !startTime && !isSentenceCompleted) {
             setStartTime(Date.now());
         }
-    }, [userInput]);
+    }, [userInput, startTime, isSentenceCompleted]);
 
-    const loadDictation = async () => {
-        try {
-            setLoading(true);
-            const response = await dictationApi.getById(dictationId);
-            setDictation(response.data);
-        } catch (error) {
-            console.error('Error loading dictation:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // Parse sentences from JSON
-    const sentences = dictation
-        ? (typeof dictation.sentences === 'string' ? JSON.parse(dictation.sentences) : dictation.sentences)
-        : [];
-    const currentSentence = sentences[currentSentenceIndex];
-
-    const replaySentence = useCallback(() => {
-        if (currentSentence && playerRef.current) {
-            playerRef.current.currentTime = currentSentence.startTime;
-            playerRef.current.play().catch(e => console.error("Play error:", e));
-        }
-    }, [currentSentence]);
-
-    // Handle sentence change - auto seek player and play
+    // Apply strict "show" settings
     useEffect(() => {
-        replaySentence();
-    }, [currentSentenceIndex, replaySentence]);
+        if (settings.alwaysShowOriginal) setShowOriginal(true);
+        if (settings.alwaysShowHint) {
+            setShowHint(true);
+            if (revealedChars === 0) setRevealedChars(1);
+        }
+    }, [settings, revealedChars]);
 
-    // Handle time update to pause at the end of the sentence
-    const handleTimeUpdate = () => {
-        if (!currentSentence || !playerRef.current) return;
+    // Auto scroll learning / blanks tab
+    useEffect(() => {
+        if ((activeTab === 'learning' || activeTab === 'blanks') && sentenceListRef.current) {
+            const activeElement = sentenceListRef.current.querySelector(`[data-index="${currentSentenceIndex}"]`);
+            if (activeElement) {
+                activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+        if (sentences.length > 0 && itemsPerPage !== 'all') {
+            const targetPage = Math.floor(currentSentenceIndex / itemsPerPage) + 1;
+            setCurrentPageLearning(targetPage);
+            setCurrentPageDictation(targetPage);
+        }
+    }, [currentSentenceIndex, activeTab, itemsPerPage, sentences.length]);
 
-        if (playerRef.current.currentTime >= currentSentence.endTime && !playerRef.current.paused) {
-            playerRef.current.pause();
+    // Keyboard shortcuts moved down
+
+    const replaySentence = useCallback((e, explicitSentence = null) => {
+        const sentenceToPlay = explicitSentence || currentSentence;
+        if (replayTimeoutRef.current) {
+            clearTimeout(replayTimeoutRef.current);
+            replayTimeoutRef.current = null;
+        }
+
+        if (sentenceToPlay && playerRef.current) {
+            setHasStarted(true);
+            if (isYouTubeUrl) {
+                if (isPlayerReady || playerRef.current?.getInternalPlayer()?.playVideo) {
+                    playerRef.current.seekTo(sentenceToPlay.startTime, 'seconds');
+                    playerRef.current.getInternalPlayer()?.playVideo?.();
+                    setIsPlaying(true);
+                }
+            } else {
+                playerRef.current.currentTime = sentenceToPlay.startTime;
+                playerRef.current.play().catch(err => console.error(err));
+                setIsPlaying(true);
+            }
+        }
+    }, [currentSentence, isYouTubeUrl, isPlayerReady]);
+
+    // Handle auto play moved down
+
+    const handleNextSentence = () => {
+        if (currentSentenceIndex < sentences.length - 1) {
+            setCurrentSentenceIndex(prev => prev + 1);
+            setStartTime(null);
+            setRevealedChars(0);
+            setShowHint(false);
+            setShowOriginal(false);
+            setHasStarted(true);
+        } else {
+            setShowSummary(true);
         }
     };
 
-    // Submit handler
-    const handleSubmit = async () => {
-        const timeSpent = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
-
-        try {
-            const response = await dictationApi.submit(dictationId, {
-                userAnswer: userInput,
-                timeSpent
+    const handleProgressCheck = (time) => {
+        if (activeTab === 'blanks' && currentSentence) {
+            const hasUnsolvedBlanks = blankConfigs[currentSentenceIndex]?.some(wIdx => {
+                const clean = currentSentence.text.split(' ')[wIdx].replace(/[.,!?"'`;:()[\]{}]/g, '').toLowerCase();
+                const ans = blankAnswers[currentSentenceIndex]?.[wIdx] || '';
+                return ans.toLowerCase() !== clean;
             });
 
-            setResults(response.data);
-        } catch (error) {
-            console.error('Error submitting:', error);
+            if (time >= currentSentence.endTime && hasUnsolvedBlanks) {
+                if (isYouTubeUrl && playerRef.current?.getInternalPlayer()?.pauseVideo) {
+                    playerRef.current.getInternalPlayer().pauseVideo();
+                    playerRef.current.seekTo(currentSentence.endTime - 0.5, 'seconds');
+                } else if (!isYouTubeUrl && playerRef.current) {
+                    playerRef.current.pause();
+                    playerRef.current.currentTime = currentSentence.endTime - 0.5;
+                }
+                setIsPlaying(false);
+                return;
+            }
+        }
+
+        if ((activeTab === 'learning' || activeTab === 'blanks') && sentences.length > 0) {
+            if (isLooping && currentSentence) {
+                if (time >= currentSentence.endTime) {
+                    if (isYouTubeUrl && playerRef.current) playerRef.current.seekTo(currentSentence.startTime, 'seconds');
+                    else if (!isYouTubeUrl && playerRef.current) playerRef.current.currentTime = currentSentence.startTime;
+                    return;
+                }
+            }
+
+            if (!isLooping && settings.continuousPlayback && currentSentence) {
+                if (time >= currentSentence.endTime && !isWaitingNextSentenceRef.current) {
+                    if (currentSentenceIndex < sentences.length - 1) {
+                        setIsPlaying(false);
+                        if (isYouTubeUrl && playerRef.current?.getInternalPlayer()?.pauseVideo) {
+                            playerRef.current.getInternalPlayer().pauseVideo();
+                        } else if (!isYouTubeUrl && playerRef.current) {
+                            playerRef.current.pause();
+                        }
+                        isWaitingNextSentenceRef.current = true;
+                        if (replayTimeoutRef.current) clearTimeout(replayTimeoutRef.current);
+                        replayTimeoutRef.current = setTimeout(() => {
+                            isWaitingNextSentenceRef.current = false;
+                            handleNextSentence();
+                        }, (settings.continuousDelay || 0) * 1000);
+                        return;
+                    }
+                }
+            }
+
+            const activeIndex = sentences.findIndex(s => time >= s.startTime && time <= s.endTime);
+            if (activeIndex !== -1 && activeIndex !== currentSentenceIndex && !isWaitingNextSentenceRef.current) {
+                setCurrentSentenceIndex(activeIndex);
+            }
+        }
+
+        if (!currentSentence) return;
+
+        if (activeTab === 'dictation') {
+            if (time >= currentSentence.endTime && isPlaying) {
+                setIsPlaying(false);
+
+                if (isYouTubeUrl && playerRef.current?.getInternalPlayer()?.pauseVideo) {
+                    playerRef.current.getInternalPlayer().pauseVideo();
+                } else if (!isYouTubeUrl && playerRef.current) {
+                    playerRef.current.pause();
+                }
+
+                if (settings.autoReplay !== "0" && !isSentenceCompleted) {
+                    const maxReplays = settings.autoReplay === "Infinity" ? Infinity : parseInt(settings.autoReplay);
+                    if (replayCountRef.current < maxReplays) {
+                        replayCountRef.current += 1;
+                        if (replayTimeoutRef.current) clearTimeout(replayTimeoutRef.current);
+
+                        replayTimeoutRef.current = setTimeout(() => {
+                            if (isYouTubeUrl && playerRef.current) {
+                                playerRef.current.seekTo(currentSentence.startTime, 'seconds');
+                                playerRef.current.getInternalPlayer()?.playVideo?.();
+                            } else if (!isYouTubeUrl && playerRef.current) {
+                                playerRef.current.currentTime = currentSentence.startTime;
+                                playerRef.current.play().catch(e => console.error(e));
+                            }
+                            setIsPlaying(true);
+                        }, settings.replayDelay * 1000);
+                        return;
+                    }
+                }
+
+                if (settings.continuousPlayback && currentSentenceIndex < sentences.length - 1) {
+                    if (replayTimeoutRef.current) clearTimeout(replayTimeoutRef.current);
+                    replayTimeoutRef.current = setTimeout(() => {
+                        handleNextSentence();
+                    }, (settings.continuousDelay || 0) * 1000);
+                }
+            }
         }
     };
 
-    // Reset handler
-    const handleReset = () => {
-        setUserInput('');
-        setResults(null);
-        setShowHint(false);
-        setShowOriginal(false);
-        setCurrentSentenceIndex(0);
-        setStartTime(null);
-        if (playerRef.current && sentences?.[0]) {
-            playerRef.current.currentTime = sentences[0].startTime;
-            playerRef.current.play().catch(e => console.error("Play error:", e));
+    const handleTimeUpdate = () => {
+        if (!currentSentence || !playerRef.current || isYouTubeUrl) return;
+        handleProgressCheck(playerRef.current.currentTime);
+    };
+
+    const triggerSubmit = async () => {
+        setIsSubmitting(true);
+        const spent = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
+
+        if (isPlaying || settings.autoReplay !== "0") {
+            setIsPlaying(false);
+            if (isYouTubeUrl && playerRef.current?.getInternalPlayer()?.pauseVideo) {
+                playerRef.current.getInternalPlayer().pauseVideo();
+            } else if (!isYouTubeUrl && playerRef.current) {
+                playerRef.current.pause();
+            }
+            if (replayTimeoutRef.current) clearTimeout(replayTimeoutRef.current);
         }
-        inputRef.current?.focus();
+
+        await submitAttempt(spent);
+
+        setTimeout(() => {
+            resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }, 100);
+        setIsSubmitting(false);
+    };
+
+    // Auto Check moved down
+
+
+    const triggerReset = () => {
+        handleReset();
+        if (!settings.alwaysShowHint) {
+            setShowHint(false);
+            setRevealedChars(0);
+        }
+        if (!settings.alwaysShowOriginal) setShowOriginal(false);
+        setStartTime(Date.now());
+        replayCountRef.current = 0;
+        replaySentence();
+        setTimeout(() => inputRef.current?.focus(), 100);
+    };
+
+    const handleWordClick = (word, e) => {
+        e.stopPropagation();
+        setSelectedWord(word);
+    };
+
+    const triggerShowHint = (isAuto = false) => {
+        setShowHint(true);
+        if (currentSentence) {
+            const rawLength = currentSentence.text.replace(/[^a-zA-Z0-9]/g, '').length;
+            if (isAuto && settings.alwaysShowHint) {
+                if (revealedChars === 0) setRevealedChars(1);
+            } else if (revealedChars < rawLength) {
+                setRevealedChars(prev => prev + 2);
+            }
+        }
+    };
+
+    const generateHintText = () => {
+        if (!currentSentence) return '';
+        const text = currentSentence.text;
+        let revealedCount = 0;
+        return text.split('').map((char) => {
+            if (char === ' ' || /[.,!?]/.test(char)) return char;
+            if (revealedCount < revealedChars) {
+                revealedCount++;
+                return char;
+            }
+            return '_';
+        }).join(' ');
+    };
+
+    const handleShadowSubmit = (index) => {
+        if (!shadowTranscript.trim()) return;
+        const originalText = sentences[index].text;
+        const levenshteinResult = calculateLevenshtein(shadowTranscript, originalText);
+        const wrongWords = analyzeWrongWords(shadowTranscript, originalText);
+        setShadowScores(prev => ({
+            ...prev,
+            [index]: { attempt: shadowTranscript, accuracy: levenshteinResult.accuracy, score: levenshteinResult.score, wrongWords }
+        }));
+        setShadowingIndex(null);
+        setShadowTranscript('');
+    };
+
+    const getSentenceColor = (index) => {
+        const res = sentenceResults[index];
+        if (!res) {
+            return index === currentSentenceIndex
+                ? 'bg-blue-600 text-white shadow-md ring-2 ring-blue-300 transform scale-110'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200';
+        }
+        const acc = res.analysis.accuracy;
+        if (acc >= 90) return index === currentSentenceIndex ? 'bg-green-600 text-white shadow-md ring-2 ring-green-300 transform scale-110' : 'bg-green-500 text-white hover:bg-green-600';
+        if (acc >= 50) return index === currentSentenceIndex ? 'bg-yellow-500 text-white shadow-md ring-2 ring-yellow-300 transform scale-110' : 'bg-yellow-400 text-white hover:bg-yellow-500';
+        return index === currentSentenceIndex ? 'bg-red-500 text-white shadow-md ring-2 ring-red-300 transform scale-110' : 'bg-red-400 text-white hover:bg-red-500';
     };
 
     // Keyboard shortcuts
     useEffect(() => {
         const handleKeyDown = (e) => {
-            // Ctrl+M: Toggle microphone
-            if (e.ctrlKey && (e.key === 'm' || e.key === 'M')) {
+            const isModifierPressed =
+                (settings.replayKey === 'Ctrl' && e.ctrlKey) ||
+                (settings.replayKey === 'Shift' && e.shiftKey) ||
+                (settings.replayKey === 'Alt' && e.altKey);
+
+            if (isModifierPressed && (e.key === 'm' || e.key === 'M')) {
                 e.preventDefault();
                 setIsRecording(prev => !prev);
             }
-            // Ctrl+Enter: Submit
-            if (e.ctrlKey && e.key === 'Enter') {
+            if (isModifierPressed && e.key === 'Enter') {
                 e.preventDefault();
-                handleSubmit();
+                if (!isSentenceCompleted) triggerSubmit();
             }
-            // Ctrl+Space: Replay current sentence
-            if (e.ctrlKey && e.key === ' ') {
+            if (isModifierPressed && e.key === ' ') {
                 e.preventDefault();
+                setHasStarted(true);
+                replayCountRef.current = 0;
                 replaySentence();
+            }
+            if (isModifierPressed && e.key === 'ArrowRight') {
+                e.preventDefault();
+                if (isSentenceCompleted) handleNextSentence();
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [userInput, currentSentence, replaySentence]);
+    }, [isSentenceCompleted, settings.replayKey, userInput, handleNextSentence, replaySentence, triggerSubmit]); // Dependencies for triggerSubmit needed inside
+
+    // Handle auto play on sentence change
+    useEffect(() => {
+        if (!showSummary && sentences.length > 0) {
+            replayCountRef.current = 0;
+            isWaitingNextSentenceRef.current = false;
+            if (replayTimeoutRef.current) clearTimeout(replayTimeoutRef.current);
+
+            if (hasStarted) {
+                replaySentence();
+            }
+
+            if (!isSentenceCompleted) {
+                setTimeout(() => inputRef.current?.focus(), 100);
+            }
+
+            if (settings.alwaysShowOriginal) setShowOriginal(true);
+            else setShowOriginal(false);
+
+            if (settings.alwaysShowHint) {
+                setShowHint(true);
+                setRevealedChars(1);
+            } else {
+                setShowHint(false);
+                setRevealedChars(0);
+            }
+        }
+    }, [currentSentenceIndex, showSummary, sentences.length, settings, hasStarted, isSentenceCompleted, replaySentence]); // Re-run when sentence changes
+
+    // Auto Check
+    useEffect(() => {
+        if (!currentSentence || isSubmitting || isSentenceCompleted || !userInput) return;
+        const cleanInput = userInput.trim().toLowerCase().replace(/[.,!?"'`;:()[\]{}]/g, '').replace(/\s+/g, ' ');
+        const cleanCorrect = currentSentence.text.trim().toLowerCase().replace(/[.,!?"'`;:()[\]{}]/g, '').replace(/\s+/g, ' ');
+        if (cleanInput === cleanCorrect && cleanInput.length > 0) {
+            triggerSubmit();
+        }
+    }, [userInput, currentSentence, isSubmitting, isSentenceCompleted, triggerSubmit]);
 
     if (loading) {
         return (
@@ -155,261 +430,179 @@ const DictationPractice = () => {
             </div>
         );
     }
+    if (!dictation) return <div className="text-center p-8">Không tìm thấy bài Dictation</div>;
 
-    if (!dictation) {
-        return <div className="text-center p-8">Không tìm thấy bài Dictation</div>;
+    if (showSummary) {
+        return <DictationSummary
+            dictation={dictation}
+            sentences={sentences}
+            sentenceResults={sentenceResults}
+            setShowSummary={setShowSummary}
+            setCurrentSentenceIndex={setCurrentSentenceIndex}
+            dictationId={dictationId}
+        />;
     }
 
     return (
-        <div className="max-w-4xl mx-auto p-4">
+        <div className="max-w-7xl mx-auto p-4">
             {/* Header */}
-            <div className="mb-6">
-                <h1 className="text-2xl font-bold text-gray-800">{dictation.title}</h1>
-                <div className="flex items-center gap-4 mt-2">
-                    <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm">
-                        {dictation.difficulty}
-                    </span>
-                    <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm">
-                        {dictation.language}
-                    </span>
-                    <span className="text-gray-500 text-sm">
-                        {sentences.length} câu
-                    </span>
-                </div>
-            </div>
-
-            {/* Player Section */}
-            <div className="bg-gray-900 rounded-xl p-4 mb-6">
-                <div className="text-xs text-red-500 mb-2 truncate">URL: {getFullMediaUrl(dictation.audioUrl)}</div>
-                <div className="relative aspect-video bg-black rounded-lg overflow-hidden mb-4 flex items-center justify-center">
-                    <video
-                        ref={playerRef}
-                        src={getFullMediaUrl(dictation.audioUrl)}
-                        controls
-                        className="w-full h-full object-contain"
-                        preload="auto"
-                        onTimeUpdate={handleTimeUpdate}
-                        onError={(e) => console.error("Native Video Error:", e.target.error, getFullMediaUrl(dictation.audioUrl))}
-                    >
-                        Your browser does not support HTML video.
-                    </video>
-                </div>
-            </div>
-
-            {/* Sentence Progress */}
-            <div className="mb-6">
-                <div className="flex items-center gap-2 mb-2">
-                    {sentences.map((_, index) => (
-                        <button
-                            key={index}
-                            onClick={() => setCurrentSentenceIndex(index)}
-                            className={`w-8 h-8 rounded-full text-sm font-medium transition ${index === currentSentenceIndex
-                                ? 'bg-blue-600 text-white'
-                                : index < currentSentenceIndex
-                                    ? 'bg-green-500 text-white'
-                                    : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                                }`}
-                        >
-                            {index + 1}
-                        </button>
-                    ))}
-                </div>
-                <p className="text-sm text-gray-500">
-                    Câu hiện tại: {currentSentenceIndex + 1} / {sentences.length}
-                </p>
-            </div>
-
-            {/* Input Section */}
-            <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-                <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-lg font-semibold text-gray-800">
-                        Nhập nội dung bạn nghe được
-                    </h2>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <button
-                            onClick={replaySentence}
-                            className="px-3 py-1 rounded-lg text-sm bg-blue-100 text-blue-700 hover:bg-blue-200 transition border border-blue-300 flex items-center gap-1"
-                            title="Có thể dùng phím tắt Ctrl + Space"
-                        >
-                            ▶️ Nghe lại câu này
-                        </button>
-                        <button
-                            onClick={() => setShowHint(!showHint)}
-                            className={`px-3 py-1 rounded-lg text-sm transition flex items-center gap-1 ${showHint
-                                ? 'bg-yellow-100 text-yellow-700 border border-yellow-300'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                }`}
-                        >
-                            💡 Gợi ý
-                        </button>
-                        <button
-                            onClick={() => setShowOriginal(!showOriginal)}
-                            className={`px-3 py-1 rounded-lg text-sm transition flex items-center gap-1 ${showOriginal
-                                ? 'bg-green-100 text-green-700 border border-green-300'
-                                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                }`}
-                        >
-                            📖 Transcript
-                        </button>
+            <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-100 pb-4">
+                <div>
+                    <h1 className="text-2xl font-bold text-gray-800">{dictation.title}</h1>
+                    <div className="flex items-center gap-3 mt-2">
+                        <span className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-semibold">{dictation.difficulty}</span>
+                        <span className="px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-semibold">{dictation.language}</span>
+                        <span className="text-gray-500 text-sm font-medium bg-gray-100 px-3 py-1 rounded-full">
+                            Đã Làm: <span className="text-gray-800">{Object.keys(sentenceResults).length}/{sentences.length}</span>
+                        </span>
                     </div>
                 </div>
+                <button
+                    onClick={() => setShowSettingsModal(true)}
+                    className="flex items-center gap-2 bg-white px-5 py-2.5 rounded-xl shadow-sm border border-gray-200 hover:bg-gray-50 hover:border-gray-300 hover:shadow transition-all text-sm font-bold text-gray-700"
+                >
+                    <span>⚙️</span> Cài đặt
+                </button>
+            </div>
 
-                {/* Hint Display */}
-                {showHint && currentSentence && (
-                    <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                        <p className="text-sm text-yellow-800">
-                            <strong>Gợi ý:</strong> {currentSentence.text.substring(0, 2)}...
-                        </p>
-                    </div>
-                )}
-
-                {/* Original Transcript */}
-                {showOriginal && (
-                    <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-                        <p className="text-sm text-green-800">
-                            <strong>Transcript:</strong> {dictation.transcript}
-                        </p>
-                    </div>
-                )}
-
-                {/* Speech Input */}
-                <div className="mb-4">
-                    <SpeechInput
-                        isRecording={isRecording}
-                        setIsRecording={setIsRecording}
-                        onTranscript={(text) => setUserInput(text)}
-                        language={dictation.language}
-                    />
-                </div>
-
-                {/* Text Input */}
-                <textarea
-                    ref={inputRef}
-                    value={userInput}
-                    onChange={(e) => setUserInput(e.target.value)}
-                    placeholder="Nhập nội dung bạn nghe được..."
-                    className="w-full h-32 p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+            {showSettingsModal && (
+                <DictationSettingsModal
+                    settings={settings}
+                    setSettings={setSettings}
+                    onClose={() => setShowSettingsModal(false)}
                 />
+            )}
 
-                {/* Action Buttons */}
-                <div className="flex items-center justify-between mt-4">
-                    <div className="text-sm text-gray-500">
-                        {userInput.length} ký tự
-                    </div>
-                    <div className="flex items-center gap-3">
-                        <button
-                            onClick={handleReset}
-                            className="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition font-medium"
-                        >
-                            🔄 Làm lại
-                        </button>
-                        <button
-                            onClick={handleSubmit}
-                            disabled={!userInput.trim()}
-                            className={`px-6 py-2 rounded-lg font-medium transition ${userInput.trim()
-                                ? 'bg-blue-600 text-white hover:bg-blue-700'
-                                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                                }`}
-                        >
-                            📝 Nộp bài
-                        </button>
-                    </div>
+            <div className="flex flex-col lg:flex-row-reverse gap-6 items-start">
+                <div className={`w-full lg:w-[450px] shrink-0 lg:sticky lg:top-6 lg:z-10 flex flex-col gap-4 ${(activeTab === 'learning' || activeTab === 'blanks') ? 'lg:h-[calc(100vh-48px)]' : ''}`}>
+                    <VideoPlayerSection
+                        ref={playerRef}
+                        dictation={dictation}
+                        cleanAudioUrl={cleanAudioUrl}
+                        isYouTubeUrl={isYouTubeUrl}
+                        getFullMediaUrl={getFullMediaUrl}
+                        isPlaying={isPlaying}
+                        setIsPlaying={setIsPlaying}
+                        playbackRate={playbackRate}
+                        setPlaybackRate={setPlaybackRate}
+                        activeTab={activeTab}
+                        isLooping={isLooping}
+                        setIsLooping={setIsLooping}
+                        handleProgressCheck={handleProgressCheck}
+                        handleTimeUpdate={handleTimeUpdate}
+                        setIsPlayerReady={setIsPlayerReady}
+                    />
+
+                    {/* Fixed Dictionary Area */}
+                    {(activeTab === 'learning' || activeTab === 'blanks') && (
+                        <div className="flex-1 min-h-[300px] lg:min-h-0 overflow-hidden flex flex-col pb-6 lg:pb-0">
+                            <FixedDictionary
+                                word={selectedWord}
+                                onClose={() => setSelectedWord(null)}
+                            />
+                        </div>
+                    )}
                 </div>
 
-                {/* Keyboard Shortcuts Hint */}
-                <div className="mt-4 pt-4 border-t border-gray-200">
-                    <p className="text-xs text-gray-500">
-                        <strong>Phím tắt:</strong> Ctrl+Space (▶️ Nghe lại) | Ctrl+M (🎤 Micro) | Ctrl+Enter (📤 Nộp bài)
-                    </p>
+                <div className="flex-1 w-full lg:max-w-[calc(100%-474px)] space-y-6">
+                    {/* Navigation Tabs */}
+                    <div className="flex bg-gray-100 p-1 rounded-xl">
+                        <button
+                            onClick={() => { setActiveTab('dictation'); setSelectedWord(null); }}
+                            className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${activeTab === 'dictation' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            ✍️ Chép chính tả
+                        </button>
+                        <button
+                            onClick={() => { setActiveTab('blanks'); setSelectedWord(null); }}
+                            className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${activeTab === 'blanks' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            🧩 Điền từ khóa
+                        </button>
+                        <button
+                            onClick={() => { setActiveTab('learning'); setSelectedWord(null); }}
+                            className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${activeTab === 'learning' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            📖 Học tương tác
+                        </button>
+                    </div>
+
+                    {activeTab === 'dictation' ? (
+                        <DictationTab
+                            sentences={sentences}
+                            currentSentenceIndex={currentSentenceIndex}
+                            setCurrentSentenceIndex={setCurrentSentenceIndex}
+                            itemsPerPage={itemsPerPage}
+                            setItemsPerPage={setItemsPerPage}
+                            currentPageDictation={currentPageDictation}
+                            setCurrentPageDictation={setCurrentPageDictation}
+                            totalPages={totalPages}
+                            currentSentencesDictation={currentSentencesDictation}
+                            getSentenceColor={getSentenceColor}
+                            isSentenceCompleted={isSentenceCompleted}
+                            userInput={userInput}
+                            handleUserInputChange={handleUserInputChange}
+                            handleShowHint={triggerShowHint}
+                            showHint={showHint}
+                            revealedChars={revealedChars}
+                            generateHintText={generateHintText}
+                            showOriginal={showOriginal}
+                            setShowOriginal={setShowOriginal}
+                            dictation={dictation}
+                            isRecording={isRecording}
+                            setIsRecording={setIsRecording}
+                            inputRef={inputRef}
+                            handleReset={triggerReset}
+                            handleNextSentence={handleNextSentence}
+                            submitAttempt={triggerSubmit}
+                            isSubmitting={isSubmitting}
+                            settings={settings}
+                            currentResult={currentResult}
+                            resultsRef={resultsRef}
+                            setHasStarted={setHasStarted}
+                            replaySentence={replaySentence}
+                        />
+                    ) : (
+                        <LearningTab
+                            itemsPerPage={itemsPerPage}
+                            setItemsPerPage={setItemsPerPage}
+                            setCurrentPageDictation={setCurrentPageDictation}
+                            setCurrentPageLearning={setCurrentPageLearning}
+                            currentSentencesLearning={currentSentencesLearning}
+                            currentPageLearning={currentPageLearning}
+                            totalPages={totalPages}
+                            currentSentenceIndex={currentSentenceIndex}
+                            setCurrentSentenceIndex={setCurrentSentenceIndex}
+                            setHasStarted={setHasStarted}
+                            replaySentence={replaySentence}
+                            activeTab={activeTab}
+                            blankConfigs={blankConfigs}
+                            blankAnswers={blankAnswers}
+                            setBlankAnswers={setBlankAnswers}
+                            showBlankHints={showBlankHints}
+                            setShowBlankHints={setShowBlankHints}
+                            isPlaying={isPlaying}
+                            setIsPlaying={setIsPlaying}
+                            playerRef={playerRef}
+                            isYouTubeUrl={isYouTubeUrl}
+                            handleWordClick={handleWordClick}
+                            sentenceListRef={sentenceListRef}
+                            shadowScores={shadowScores}
+                            shadowingIndex={shadowingIndex}
+                            setShadowingIndex={setShadowingIndex}
+                            isShadowRecording={isShadowRecording}
+                            setIsShadowRecording={setIsShadowRecording}
+                            shadowTranscript={shadowTranscript}
+                            setShadowTranscript={setShadowTranscript}
+                            handleShadowSubmit={handleShadowSubmit}
+                            dictation={dictation}
+                            settings={settings}
+                            selectedWord={selectedWord}
+                            setSelectedWord={setSelectedWord}
+                        />
+                    )}
                 </div>
             </div>
-
-            {/* Results Section */}
-            {
-                results && (
-                    <div className="bg-white rounded-xl shadow-lg p-6">
-                        <div className="flex items-center justify-between mb-6">
-                            <h2 className="text-xl font-bold text-gray-800">📊 Kết Quả</h2>
-                            {getAccuracyBadge(results.analysis.accuracy)}
-                        </div>
-
-                        {/* Score Display */}
-                        <div className="grid grid-cols-3 gap-4 mb-6">
-                            <div className="text-center p-4 bg-blue-50 rounded-xl">
-                                <p className="text-3xl font-bold text-blue-600">{results.analysis.score}</p>
-                                <p className="text-sm text-gray-600">Điểm tổng</p>
-                            </div>
-                            <div className="text-center p-4 bg-green-50 rounded-xl">
-                                <p className="text-3xl font-bold text-green-600">
-                                    {results.analysis.accuracy.toFixed(1)}%
-                                </p>
-                                <p className="text-sm text-gray-600">Độ chính xác</p>
-                            </div>
-                            <div className="text-center p-4 bg-purple-50 rounded-xl">
-                                <p className="text-3xl font-bold text-purple-600">
-                                    {results.analysis.distance}
-                                </p>
-                                <p className="text-sm text-gray-600">Số lỗi</p>
-                            </div>
-                        </div>
-
-                        {/* Wrong Words Analysis */}
-                        {results.analysis.wrongWords.length > 0 && (
-                            <div className="mb-6">
-                                <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                                    ❌ Từ/cụm từ sai
-                                </h3>
-                                <div className="space-y-2">
-                                    {results.analysis.wrongWords.map((word, index) => (
-                                        <div
-                                            key={index}
-                                            className="flex items-center gap-3 p-3 bg-red-50 rounded-lg"
-                                        >
-                                            <span className="px-2 py-1 bg-red-200 text-red-700 rounded text-sm font-mono">
-                                                {word.got}
-                                            </span>
-                                            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                                            </svg>
-                                            <span className="px-2 py-1 bg-green-200 text-green-700 rounded text-sm font-mono">
-                                                {word.expected}
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Correct Transcript */}
-                        <div className="mb-6">
-                            <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                                ✅ Transcript chuẩn
-                            </h3>
-                            <div className="p-4 bg-gray-50 rounded-xl">
-                                <p className="text-gray-700 leading-relaxed">
-                                    {results.correctTranscript}
-                                </p>
-                            </div>
-                        </div>
-
-                        {/* Comparison */}
-                        <div>
-                            <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                                📝 So sánh
-                            </h3>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="p-4 bg-gray-50 rounded-xl">
-                                    <p className="text-sm text-gray-500 mb-2">Của bạn:</p>
-                                    <p className="text-gray-700">{results.attempt.userAnswer || '(Chưa nhập)'}</p>
-                                </div>
-                                <div className="p-4 bg-green-50 rounded-xl">
-                                    <p className="text-sm text-gray-500 mb-2">Chuẩn:</p>
-                                    <p className="text-gray-700">{results.correctTranscript}</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
         </div>
     );
 };

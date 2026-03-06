@@ -3,10 +3,13 @@ import TaskList from '../components/tasks/TaskList';
 import api from '../services/api';
 import {
     Sparkles, Target, Zap, Play, Pause, RotateCcw,
-    Send, Loader2, Youtube, Type, PenTool, Flame, Calendar, UploadCloud
+    Send, Loader2, Youtube, Type, PenTool, Flame, Calendar, UploadCloud, X
 } from 'lucide-react';
 import WritingPractice from '../components/WritingPractice';
 import { useAuth } from '../context/AuthContext';
+import MagicInput from '../components/learning/MagicInput';
+import MagicFlashcard from '../components/learning/MagicFlashcard';
+import LearningProgressChart from '../components/learning/LearningProgressChart';
 
 const Dashboard = () => {
     const { user } = useAuth();
@@ -21,6 +24,9 @@ const Dashboard = () => {
     const [loadingAI, setLoadingAI] = useState(false);
     const [dueCount, setDueCount] = useState(0);
     const [dueItems, setDueItems] = useState([]);
+
+    // --- State cho Magic Dictionary ---
+    const [magicResult, setMagicResult] = useState(null);
 
     // --- State cho Habit Tracking ---
     const [userStats, setUserStats] = useState({ currentStreak: 0, longestStreak: 0, totalLearned: 0 });
@@ -46,7 +52,7 @@ const Dashboard = () => {
             setUserStats({
                 currentStreak: streakRes.data.currentStreak,
                 longestStreak: streakRes.data.longestStreak,
-                totalLearned: 0 // Mocked for now, need another API to count items
+                totalLearned: questsRes.data.find(q => q.id === 1)?.current || 0 // Tạm dùng current vocab quest làm total để demo biểu đồ
             });
             setDailyQuests({
                 addVocab: questsRes.data.find(q => q.id === 1) || { current: 0, target: 10 },
@@ -144,6 +150,12 @@ const Dashboard = () => {
 
     const navigate = (path) => {
         window.location.href = path; // Đơn giản hóa vì Dashboard không wrap bằng Link
+    };
+
+    const handleMagicSuccess = (newFlashcard) => {
+        setMagicResult(newFlashcard);
+        // Tăng số từ đã học trên biểu đồ (nếu muốn realtime)
+        setUserStats(prev => ({ ...prev, totalLearned: prev.totalLearned + 1 }));
     };
 
     return (
@@ -354,6 +366,40 @@ const Dashboard = () => {
                         </div>
                     </div>
 
+                    {/* --- 2. MAGIC DICTIONARY KHU VỰC CHÍNH --- */}
+                    <div className="bg-gradient-to-br from-purple-50 to-indigo-50 p-6 sm:p-8 rounded-3xl border border-purple-100 shadow-sm relative overflow-hidden">
+                        {/* Background blobs for premium feel */}
+                        <div className="absolute top-[-50px] right-[-50px] w-64 h-64 bg-purple-200/50 rounded-full blur-3xl pointer-events-none"></div>
+                        <div className="absolute bottom-[-50px] left-[-50px] w-48 h-48 bg-indigo-200/50 rounded-full blur-3xl pointer-events-none"></div>
+
+                        <div className="relative z-10 flex flex-col items-center max-w-4xl mx-auto space-y-8">
+
+                            <div className="text-center space-y-2">
+                                <h2 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-700 to-indigo-600 flex items-center justify-center gap-2">
+                                    <Sparkles className="w-8 h-8 text-yellow-500" />
+                                    Magic Dictionary
+                                </h2>
+                                <p className="text-slate-600 font-medium">Nhập 1 từ vựng bất kỳ, AI sẽ hô biến thành thẻ học chi tiết.</p>
+                            </div>
+
+                            <div className="w-full">
+                                <MagicInput onMagicSuccess={handleMagicSuccess} />
+                            </div>
+
+                            {/* Flashcard Result Area */}
+                            {magicResult && (
+                                <div className="w-full mt-8 animate-in zoom-in-95 duration-500 relative">
+                                    <button
+                                        onClick={() => setMagicResult(null)}
+                                        className="absolute -top-3 -right-3 p-2 bg-white rounded-full shadow-md text-slate-400 hover:text-slate-600 z-50 transition-colors"
+                                    >
+                                        <X className="w-5 h-5" />
+                                    </button>
+                                    <MagicFlashcard data={magicResult} />
+                                </div>
+                            )}
+                        </div>
+                    </div>
 
                     {/* HẾT KHU VỰC NHẬP LIỆU */}
 
@@ -368,8 +414,10 @@ const Dashboard = () => {
                     </div>
                 </div>
 
-                {/* Cột phải: Sidebar (Daily Quests & Focus Timer) */}
+                {/* Cột phải: Sidebar (Daily Quests & Focus Timer & Charts) */}
                 <div className="space-y-6">
+                    {/* Học Tự Động Thống Kê (Recharts) */}
+                    <LearningProgressChart learnedCount={userStats.totalLearned} totalCount={100} />
                     {/* Daily Quests */}
                     {dailyQuests && (
                         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm sticky top-6">

@@ -1,23 +1,195 @@
-// prisma/schema.prisma
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "binary"
+}
 
-// ============================================
-// 1. KẾT NỐI DATABASE
-// ============================================
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-// ============================================
-// 2. CẤU HÌNH CLIENT
-// ============================================
-generator client {
-  provider = "prisma-client-js"
+model User {
+  id                String             @id @default(uuid())
+  email             String             @unique
+  password          String
+  fullName          String?            @map("full_name")
+  preferences       Json?              @default("{}")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  currentStreak     Int                @default(0) @map("current_streak")
+  longestStreak     Int                @default(0) @map("longest_streak")
+  lastActiveDate    DateTime?          @map("last_active_date")
+  xp                Int                @default(0)
+  level             Int                @default(1)
+  activityLogs      ActivityLog[]
+  dictationAttempts DictationAttempt[]
+  dictations        Dictation[]
+  learningItems     LearningItem[]
+  resources         Resource[]
+  tasks             Task[]
+  progress          UserProgress[]
+  Insight           Insight[]
+  transactions      Transaction[]
+  financeCategories FinanceCategory[]
+  budgets           Budget[]
+  decks             Deck[]
+  goals             Goal[]
+  dailyQuests       DailyQuest[]
+  badges            UserBadge[]
+  conversations     Conversation[]
+
+  @@map("users")
 }
 
-// ============================================
-// 3. ENUMS (Các kiểu dữ liệu cố định)
-// ============================================
+model Resource {
+  id            String         @id @default(uuid())
+  userId        String         @map("user_id")
+  title         String
+  type          ResourceType   @default(TEXT)
+  filePath      String?        @map("file_path")
+  rawContent    String?        @map("raw_content")
+  aiMetadata    Json?          @default("{}") @map("ai_metadata")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  dictations    Dictation[]
+  learningItems LearningItem[]
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks         Task[]
+
+  @@map("resources")
+}
+
+model LearningItem {
+  id                String             @id @default(uuid())
+  resourceId        String?            @map("resource_id")
+  term              String
+  type              ItemType           @default(VOCABULARY)
+  definition        String?
+  exampleSentence   String?            @map("example_sentence")
+  extraInfo         Json?              @default("{}") @map("extra_info")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  userId            String?            @map("user_id")
+  deckId            String?            @map("deck_id")
+  dictationAttempts DictationAttempt[]
+  resource          Resource?          @relation(fields: [resourceId], references: [id])
+  user              User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deck              Deck?              @relation(fields: [deckId], references: [id], onDelete: SetNull)
+  progress          UserProgress[]
+
+  @@index([term])
+  @@map("learning_items")
+}
+
+model Dictation {
+  id         String             @id @default(uuid())
+  userId     String             @map("user_id")
+  resourceId String?            @map("resource_id")
+  title      String
+  audioUrl   String             @map("audio_url")
+  transcript String
+  sentences  Json               @default("[]")
+  vocabulary Json?
+  summary    String?
+  sourceType String             @default("upload") @map("source_type")
+  sourceUrl  String?            @map("source_url")
+  duration   Int?
+  difficulty String             @default("medium")
+  language   String             @default("en")
+  createdAt  DateTime           @default(now()) @map("created_at")
+  updatedAt  DateTime           @updatedAt @map("updated_at")
+  category   String             @default("General")
+  tags       String[]           @default([])
+  attempts   DictationAttempt[]
+  resource   Resource?          @relation(fields: [resourceId], references: [id])
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("dictations")
+}
+
+model DictationAttempt {
+  id              String        @id @default(uuid())
+  dictationId     String        @map("dictation_id")
+  userId          String        @map("user_id")
+  learningItemId  String?       @map("learning_item_id")
+  originalText    String        @map("original_text")
+  userInput       String        @map("user_input")
+  accuracyScore   Float         @map("accuracy_score")
+  levenshteinDist Int           @map("levenshtein_dist")
+  timeSpent       Int           @map("time_spent")
+  errorDetails    Json?         @default("[]") @map("error_details")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  dictation       Dictation     @relation(fields: [dictationId], references: [id], onDelete: Cascade)
+  learningItem    LearningItem? @relation(fields: [learningItemId], references: [id])
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([dictationId])
+  @@index([userId])
+  @@map("dictation_attempts")
+}
+
+model UserProgress {
+  id             String       @id @default(uuid())
+  userId         String       @map("user_id")
+  itemId         String       @map("item_id")
+  proficiency    Int          @default(0)
+  nextReviewDate DateTime?    @map("next_review_date")
+  reviewHistory  Json?        @default("[]") @map("review_history")
+  lastReviewedAt DateTime     @default(now()) @map("last_reviewed_at")
+  easeFactor     Float        @default(2.5)
+  interval       Int          @default(0)
+  repetition     Int          @default(0)
+  item           LearningItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, itemId])
+  @@index([nextReviewDate])
+  @@map("user_progress")
+}
+
+model Task {
+  id          String    @id @default(uuid())
+  title       String
+  description String?
+  status      String    @default("TODO")
+  dueDate     DateTime?
+  priority    String    @default("MEDIUM")
+  userId      String
+  resourceId  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  resource    Resource? @relation(fields: [resourceId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@map("tasks")
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  action    String
+  count     Int      @default(1)
+  date      DateTime @db.Date
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, action, date])
+  @@map("activity_logs")
+}
+
+model Insight {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  title     String
+  content   String
+  category  String   @default("Error")
+  tags      String[] @default([])
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("insights")
+}
 
 enum ResourceType {
   PDF
@@ -29,10 +201,10 @@ enum ResourceType {
 }
 
 enum ItemType {
-  VOCABULARY // Từ vựng
-  GRAMMAR    // Ngữ pháp
-  CONCEPT    // Khái niệm (Dùng cho môn khác như Tài chính/Code)
-  SENTENCE   // Câu hội thoại (phục vụ nghe chép chính tả Dictation)
+  VOCABULARY
+  GRAMMAR
+  CONCEPT
+  SENTENCE
 }
 
 enum Difficulty {
@@ -52,226 +224,138 @@ enum Language {
   SPANISH
 }
 
-// ============================================
-// 4. MODELS (Bảng dữ liệu chính)
-// ============================================
+// ===== FINANCE MODULE =====
 
-// ------------------------------------------
-// User Model - Quản lý người dùng
-// ------------------------------------------
-model User {
+model Transaction {
+  id           String          @id @default(uuid())
+  userId       String          @map("user_id")
+  categoryId   String?         @map("category_id")
+  amount       Float
+  type         TransactionType
+  note         String?
+  date         DateTime        @default(now())
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category FinanceCategory?  @relation(fields: [categoryId], references: [id])
+
+  @@index([userId])
+  @@index([date])
+  @@map("transactions")
+}
+
+model FinanceCategory {
+  id           String          @id @default(uuid())
+  userId       String          @map("user_id")
+  name         String
+  icon         String          @default("💰")
+  color        String          @default("#6366f1")
+  type         TransactionType
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@index([userId])
+  @@map("finance_categories")
+}
+
+model Budget {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  categoryId String   @map("category_id")
+  amount     Float
+  month      Int      // 1-12
+  year       Int
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category FinanceCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, month, year])
+  @@index([userId])
+  @@map("budgets")
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+// ===== LANGUAGE LEARNING MODULE EXTENSIONS =====
+
+model Deck {
+  id          String         @id @default(uuid())
+  userId      String         @map("user_id")
+  title       String
+  description String?
+  isPublic    Boolean        @default(false) @map("is_public")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items       LearningItem[]
+
+  @@index([userId])
+  @@map("decks")
+}
+
+model Goal {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  title           String
+  target          Int       
+  currentProgress Int       @default(0) @map("current_progress")
+  deadline        DateTime?
+  status          String    @default("IN_PROGRESS") 
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("goals")
+}
+
+model DailyQuest {
   id          String   @id @default(uuid())
-  email       String   @unique
-  password    String   // Mật khẩu đã được mã hóa (hashed)
-  fullName    String?  @map("full_name")
-  
-  // Lưu cài đặt: { "theme": "dark", "daily_goal": 50, "target_level": "IELTS 7.0" }
-  preferences Json?    @default("{}") 
-  
+  userId      String   @map("user_id")
+  date        DateTime @db.Date 
+  type        String   
+  target      Int      
+  progress    Int      @default(0)
+  isCompleted Boolean  @default(false) @map("is_completed")
+  xpReward    Int      @default(50) @map("xp_reward")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Habit Tracking
-  currentStreak     Int       @default(0) @map("current_streak")
-  longestStreak     Int       @default(0) @map("longest_streak")
-  lastActiveDate    DateTime? @map("last_active_date")
-
-  // Quan hệ: Một User có nhiều Resource và nhiều Progress
-  resources         Resource[]
-  progress          UserProgress[]
-  tasks             Task[]
-  activityLogs      ActivityLog[]
-  dictations        Dictation[]      // User có thể tạo nhiều bài Dictation
-  dictationAttempts DictationAttempt[] // User có nhiều lần làm bài Dictation
-
-  @@map("users")
+  @@unique([userId, date, type])
+  @@map("daily_quests")
 }
 
-// ------------------------------------------
-// Resource Model - Tài nguyên học tập
-// ------------------------------------------
-model Resource {
-  id          String       @id @default(uuid())
-  userId      String       @map("user_id")
-  
-  title       String
-  type        ResourceType @default(TEXT)
-  filePath    String?      @map("file_path") // URL trên Cloudinary/S3 hoặc đường dẫn file
-  
-  // Nội dung thô trích xuất từ file (để AI đọc lại mà không cần tải file)
-  rawContent  String?      @db.Text @map("raw_content") 
-  
-  // KHO BÁU CỦA AI: Lưu tóm tắt, độ khó, tags... 
-  // Ví dụ: { "summary": "...", "difficulty": "B1", "tags": ["finance", "money"] }
-  aiMetadata  Json?        @default("{}") @map("ai_metadata")
-  
-  createdAt   DateTime     @default(now()) @map("created_at")
-
-  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  learningItems LearningItem[]
-  tasks       Task[]
-  dictations  Dictation[]  // Từ 1 Resource có thể tạo nhiều bài Dictation
-
-  @@map("resources")
-}
-
-// ------------------------------------------
-// LearningItem Model - Từ vựng, ngữ pháp, khái niệm
-// ------------------------------------------
-model LearningItem {
-  id              String   @id @default(uuid())
-  resourceId      String?  @map("resource_id") // Từ tài liệu nào mà ra? (Có thể null nếu thêm tay)
-  
-  term            String   // Từ vựng hoặc Cấu trúc câu
-  type            ItemType @default(VOCABULARY)
-  definition      String?  @db.Text
-  exampleSentence String?  @db.Text @map("example_sentence")
-  
-  // MỞ RỘNG VÔ HẠN: Lưu IPA, ảnh minh họa, từ đồng nghĩa...
-  // Ví dụ: { "ipa": "/həˈləʊ/", "synonyms": ["hi", "greetings"], "imageUrl": "..." }
-  extraInfo       Json?    @default("{}") @map("extra_info")
-  
-  createdAt       DateTime @default(now()) @map("created_at")
-
-  resource        Resource?      @relation(fields: [resourceId], references: [id])
-  progress        UserProgress[]
-  dictationAttempts DictationAttempt[] // Liên kết với các lần làm Dictation
-
-  @@index([term]) // Tìm kiếm từ vựng cực nhanh
-  @@map("learning_items")
-}
-
-// ------------------------------------------
-// Dictation Model - Bài Nghe Chép Chính Tả (MỚI)
-// ------------------------------------------
-model Dictation {
-  id          String     @id @default(uuid())
-  userId      String     @map("user_id")
-  resourceId  String?    @map("resource_id") // Từ tài liệu nào (có thể null nếu tạo thủ công)
-  
-  title       String
-  audioUrl    String     @map("audio_url") // URL file audio/video
-  transcript  String     @db.Text // Transcript đầy đủ của toàn bộ đoạn
-  
-  // Cấu trúc câu với timestamp cho từng câu
-  sentences   Json       @default("[]")
-  
-  // Các trường mới cho AI
-  vocabulary  Json?      // [string] - từ vựng mới
-  summary     String?    @db.Text // tóm tắt nội dung
-  sourceType  String     @default("upload") @map("source_type") // upload, youtube, manual
-  sourceUrl   String?    @map("source_url") // URL gốc nếu là YouTube
-  duration    Int?       // Tổng thời lượng (giây)
-
-  difficulty  String     @default("medium")
-  language    String     @default("en")
-  
-  createdAt   DateTime   @default(now()) @map("created_at")
-  updatedAt   DateTime   @updatedAt @map("updated_at")
-
-  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  resource    Resource?          @relation(fields: [resourceId], references: [id], onDelete: SetNull)
-  attempts    DictationAttempt[] // Một bài Dictation có nhiều lần làm bài
-
-  @@map("dictations")
-}
-
-// ------------------------------------------
-// DictationAttempt Model - Lần làm bài Dictation (MỚI)
-// ------------------------------------------
-model DictationAttempt {
-  id              String   @id @default(uuid())
-  dictationId     String   @map("dictation_id")
-  userId          String   @map("user_id")
-  learningItemId  String?  @map("learning_item_id") // Nếu luyện tập từ câu cụ thể
-  
-  originalText    String   @db.Text @map("original_text") // Câu gốc cần nghe
-  userInput       String   @db.Text @map("user_input") // Những gì user đã gõ
-  
-  // Kết quả chấm điểm
-  accuracyScore   Float    @map("accuracy_score") // Độ chính xác (0-100)
-  levenshteinDist Int      @map("levenshtein_dist") // Khoảng cách Levenshtein
-  timeSpent       Int      @map("time_spent") // Thời gian làm bài (giây)
-  
-  // Chi tiết lỗi - Format: [{ "expected": "hello", "got": "helo", "position": 5 }]
-  errorDetails    Json?    @default("[]") @map("error_details")
-  
-  createdAt       DateTime @default(now()) @map("created_at")
-
-  dictation       Dictation     @relation(fields: [dictationId], references: [id], onDelete: Cascade)
-  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  learningItem    LearningItem? @relation(fields: [learningItemId], references: [id], onDelete: SetNull)
-
-  @@index([dictationId])
-  @@index([userId])
-  @@map("dictation_attempts")
-}
-
-// ------------------------------------------
-// UserProgress Model - Tiến độ học tập
-// ------------------------------------------
-model UserProgress {
-  id             String    @id @default(uuid())
-  userId         String    @map("user_id")
-  itemId         String    @map("item_id")
-  
-  proficiency    Int       @default(0) // Độ thành thạo: 0 (Mới) -> 5 (Master)
-  nextReviewDate DateTime? @map("next_review_date") // Ngày AI nhắc học lại (Spaced Repetition)
-  
-  // Lưu lịch sử tương tác
-  // Ví dụ: { "logs": [{ "date": "2024-01-01", "result": "forgot" }, { "date": "2024-01-02", "result": "remembered" }] }
-  reviewHistory  Json?     @default("{}") @map("review_history")
-  
-  lastReviewedAt DateTime  @default(now()) @map("last_reviewed_at")
-
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  item           LearningItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, itemId]) // Một người chỉ học 1 từ này 1 lần duy nhất (tránh trùng lặp)
-  @@index([nextReviewDate])  // Để query nhanh: "Hôm nay cần ôn từ nào?"
-  @@map("user_progress")
-}
-
-// ------------------------------------------
-// Task Model - Nhiệm vụ học tập
-// ------------------------------------------
-model Task {
-  id          String    @id @default(uuid())
-  title       String    // Ví dụ: "Ôn tập bài IELTS Reading"
-  description String?
-  status      String    @default("TODO") // TODO, IN_PROGRESS, DONE
-  dueDate     DateTime? // Ngày phải làm
-  priority    String    @default("MEDIUM") // HIGH, MEDIUM, LOW
-  
-  // Quan hệ với User
-  userId      String
-  user        User      @relation(fields: [userId], references: [id])
-
-  // Quan hệ với Resource (Liên kết ngược lại Resource)
-  // Task này sinh ra từ tài liệu nào?
-  resourceId  String?
-  resource    Resource? @relation(fields: [resourceId], references: [id])
-
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  @@map("tasks")
-}
-
-// ------------------------------------------
-// ActivityLog Model - Log hoạt động (cho Heatmap/Streak)
-// ------------------------------------------
-model ActivityLog {
+model UserBadge {
   id        String   @id @default(uuid())
   userId    String   @map("user_id")
-  action    String   // Ví dụ: "STUDY_SESSION", "ADD_VOCAB", "FOCUS_TIMER", "DICTATION_COMPLETE"
-  count     Int      @default(1)
-  date      DateTime @db.Date // Chỉ lưu ngày (ví dụ: 2024-01-01)
-  createdAt DateTime @default(now()) @map("created_at")
-
+  badgeId   String   @map("badge_id") 
+  earnedAt  DateTime @default(now()) @map("earned_at")
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Đảm bảo mỗi user chỉ có 1 log cho mỗi action mỗi ngày
-  @@unique([userId, action, date])
-  @@map("activity_logs")
+  @@unique([userId, badgeId])
+  @@map("user_badges")
+}
+
+model Conversation {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  topic      String
+  transcript Json     @default("[]") 
+  score      Float?
+  feedback   Json?    @default("{}") 
+  createdAt  DateTime @default(now()) @map("created_at")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("conversations")
 }

@@ -190,6 +190,56 @@ const chatWithAI = async (req, res) => {
   }
 };
 
+const quickAdd = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { keyword, modelId } = req.body;
+
+    if (!keyword || keyword.trim() === '') {
+      return res.status(400).json({ error: "Vui lòng cung cấp từ vựng cần tra cứu" });
+    }
+
+    // Default model fallback
+    let finalModelId = modelId;
+    if (!finalModelId) {
+      const userService = require('../services/user.service');
+      const prefs = await userService.getPreferences(userId);
+      finalModelId = prefs.defaultAiModel || 'gemini-2.0-flash';
+    }
+
+    const newLearningItem = await learningService.quickAddVocabulary(userId, keyword, finalModelId);
+
+    res.status(201).json({ message: "Thêm từ vựng thành công", data: newLearningItem });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const lookup = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const { keyword, modelId } = req.body;
+
+    if (!keyword || keyword.trim() === '') {
+      return res.status(400).json({ error: "Vui lòng cung cấp từ vựng cần tra cứu" });
+    }
+
+    // Default model fallback
+    let finalModelId = modelId;
+    if (!finalModelId && userId) {
+      const userService = require('../services/user.service');
+      const prefs = await userService.getPreferences(userId);
+      finalModelId = prefs.defaultAiModel || 'gemini-2.0-flash';
+    }
+
+    const result = await learningService.lookupVocabulary(keyword, finalModelId);
+
+    res.status(200).json({ data: result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 module.exports = {
   analyzeAndSave,
   getResources,
@@ -200,5 +250,7 @@ module.exports = {
   updateReview,
   getModels,
   evaluateWriting,
-  chatWithAI
+  chatWithAI,
+  quickAdd,
+  lookup
 };

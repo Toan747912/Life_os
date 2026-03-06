@@ -45,3 +45,5 @@ life-os-backend/.env
 life-os-frontend/dist/
 life-os-frontend/node_modules/
 life-os-backend/node_modules/
+life-os-backend/uploads/
+*.mp4

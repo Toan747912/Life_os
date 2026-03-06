@@ -1,22 +1,60 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
 const AuthContext = createContext();
 
-export const AuthProvider = ({ children }) => {
-    // Để cho "thật", ta sẽ lấy ID từ database thực mà tôi đã kiểm tra trước đó
-    const [user, setUser] = useState({
-        id: '1b0eca16-b3d4-4d27-b172-c59c54984ce3', // ID thực từ database
-        name: 'Toàn'
-    });
+const getStoredUser = () => {
+    try {
+        const userStr = localStorage.getItem('user');
+        return userStr ? JSON.parse(userStr) : null;
+    } catch {
+        return null;
+    }
+};
 
+export const AuthProvider = ({ children }) => {
+    const [user, setUser] = useState(getStoredUser);
+    const [token, setToken] = useState(() => localStorage.getItem('token'));
+    const [isLoading, setIsLoading] = useState(true);
+
+    // Kiểm tra tính hợp lệ của token khi app khởi động
     useEffect(() => {
-        // Sau này có thể login/logout ở đây
-        // Hiện tại ta lưu vào localStorage để giữ session
-        localStorage.setItem('userId', user.id);
-    }, [user]);
+        const storedToken = localStorage.getItem('token');
+        const storedUser = getStoredUser();
+
+        if (storedToken && storedUser) {
+            setToken(storedToken);
+            setUser(storedUser);
+        } else {
+            // Xóa sạch nếu có một trong hai
+            localStorage.removeItem('token');
+            localStorage.removeItem('userId');
+            localStorage.removeItem('user');
+            setToken(null);
+            setUser(null);
+        }
+        setIsLoading(false);
+    }, []);
+
+    const login = useCallback((newToken, newUser) => {
+        localStorage.setItem('token', newToken);
+        localStorage.setItem('userId', newUser.id);
+        localStorage.setItem('user', JSON.stringify(newUser));
+        setToken(newToken);
+        setUser(newUser);
+    }, []);
+
+    const logout = useCallback(() => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('userId');
+        localStorage.removeItem('user');
+        setToken(null);
+        setUser(null);
+    }, []);
+
+    const isAuthenticated = !!token && !!user;
 
     return (
-        <AuthContext.Provider value={{ user, setUser }}>
+        <AuthContext.Provider value={{ user, token, isAuthenticated, isLoading, login, logout }}>
             {children}
         </AuthContext.Provider>
     );

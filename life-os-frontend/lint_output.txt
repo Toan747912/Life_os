@@ -1,0 +1,36 @@
+﻿
+E:\Users\ngoqu\FullStack_Training\Life_os\life-os-frontend\src\components\dictation\VideoPlayerSection.jsx
+  7:5  error  'cleanAudioUrl' is defined but never used  no-unused-vars
+
+E:\Users\ngoqu\FullStack_Training\Life_os\life-os-frontend\src\hooks\useDictationData.js
+  91:18  error  'e' is defined but never used  no-unused-vars
+
+E:\Users\ngoqu\FullStack_Training\Life_os\life-os-frontend\src\hooks\useDictationProgress.js
+  17:39  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+  15 |             try {
+  16 |                 const saved = JSON.parse(savedStr);
+> 17 |                 if (saved.userInputs) setUserInputs(saved.userInputs);
+     |                                       ^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  18 |                 if (saved.sentenceResults) setSentenceResults(saved.sentenceResults);
+  19 |                 if (saved.currentSentenceIndex !== undefined) setCurrentSentenceIndex(saved.currentSentenceIndex);
+  20 |             } catch (e) {  react-hooks/set-state-in-effect
+
+E:\Users\ngoqu\FullStack_Training\Life_os\life-os-frontend\src\hooks\useDictationSettings.js
+  27:18  error  'e' is defined but never used  no-unused-vars
+
+E:\Users\ngoqu\FullStack_Training\Life_os\life-os-frontend\src\pages\DictationPractice.jsx
+   18:11  error    'navigate' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u                                                                        no-unused-vars
+   32:9   error    'userInputs' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u                                                                      no-unused-vars
+  149:8   warning  React Hook useEffect has missing dependencies: 'handleNextSentence', 'replaySentence', and 'triggerSubmit'. Either include them or remove the dependency array  react-hooks/exhaustive-deps
+  200:8   warning  React Hook useEffect has missing dependencies: 'hasStarted', 'isSentenceCompleted', and 'replaySentence'. Either include them or remove the dependency array    react-hooks/exhaustive-deps
+  348:8   warning  React Hook useEffect has a missing dependency: 'triggerSubmit'. Either include it or remove the dependency array                                                react-hooks/exhaustive-deps
+
+âœ– 9 problems (6 errors, 3 warnings)
+

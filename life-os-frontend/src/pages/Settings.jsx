@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ModelSelector from '../components/learning/ModelSelector';
 import api from '../services/api';
+import toast from 'react-hot-toast';
 import { Save, Loader2, Sparkles, Settings as SettingsIcon } from 'lucide-react';
 
 const Settings = () => {
@@ -47,7 +48,7 @@ const Settings = () => {
       } catch (error) {
         console.error("Error fetching preferences:", error);
         if (error.response && error.response.status === 404) {
-          alert("Lỗi: Người dùng không tồn tại. Vui lòng đăng xuất và đăng nhập lại.");
+          toast.error('Người dùng không tồn tại. Vui lòng đăng xuất và đăng nhập lại.');
         }
       }
     } finally {
@@ -74,7 +75,7 @@ const Settings = () => {
       await api.patch('/user/preferences', preferences);
       triggerSuccessToast();
     } catch (error) {
-      alert("Lỗi khi lưu cài đặt: " + error.message);
+      toast.error('Lỗi khi lưu cài đặt: ' + (error.response?.data?.error || error.message));
     } finally {
       setSaving(false);
     }

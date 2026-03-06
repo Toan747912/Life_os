@@ -19,7 +19,7 @@ exports.analyzeAudio = async (req, res) => {
             return res.status(400).json({ error: 'Vui lòng upload file audio/video' });
         }
 
-        const { difficulty, language, title } = req.body;
+        const { difficulty, language, title, srtContent } = req.body;
         const filePath = path.join(__dirname, '../..', 'uploads', req.file.filename);
         const fileUrl = `/uploads/${req.file.filename}`;
         const mimeType = req.file.mimetype;
@@ -34,8 +34,27 @@ exports.analyzeAudio = async (req, res) => {
             return res.status(400).json({ error: 'File không tồn tại' });
         }
 
-        // Upload lên Gemini File API và phân tích
-        const result = await analyzeWithGemini(filePath, mimeType, aiModel);
+        let result;
+        if (srtContent && srtContent.trim()) {
+            const parsedSrt = parseSrtText(srtContent);
+            const textAnalysis = await analyzeTextWithGemini(parsedSrt.transcript, aiModel);
+            let duration = 0;
+            try {
+                duration = await getMediaDuration(filePath);
+            } catch (e) {
+                console.log('Could not get duration:', e.message);
+            }
+            result = {
+                duration,
+                analysis: {
+                    ...parsedSrt,
+                    ...textAnalysis
+                }
+            };
+        } else {
+            // Upload lên Gemini File API và phân tích
+            result = await analyzeWithGemini(filePath, mimeType, aiModel);
+        }
 
         // Trả về kết quả để user xác nhận
         res.json({
@@ -88,17 +107,17 @@ async function analyzeWithGemini(filePath, mimeType, aiModel = 'gemini-1.5-flash
     {
       "transcript": "Toàn bộ nội dung nghe được, viết hoa đầu câu, có dấu câu đầy đủ",
       "sentences": [
-        {"text": "Câu 1 hoàn chỉnh", "startTime": 0, "endTime": 3.5},
-        {"text": "Câu 2 hoàn chỉnh", "startTime": 3.5, "endTime": 7.2}
+        {"text": "Câu 1 hoàn chỉnh (Tiếng Anh)", "translation": "Câu 1 dịch sang Tiếng Việt", "startTime": 0, "endTime": 3.5},
+        {"text": "Câu 2 hoàn chỉnh (Tiếng Anh)", "translation": "Câu 2 dịch sang Tiếng Việt", "startTime": 3.5, "endTime": 7.2}
       ],
-      "summary": "Tóm tắt 2-3 câu về nội dung chính của đoạn audio",
+      "summary": "Tóm tắt 2-3 câu về nội dung chính của đoạn audio bằng Tiếng Việt",
       "vocabulary": ["từ1", "từ2", "từ3", "từ4", "từ5"], 
       "keyPhrases": ["cụm từ thông dụng 1", "cụm từ thông dụng 2"]
     }
 
     Yêu cầu:
     - Transcript phải chính xác, đầy đủ, có dấu câu
-    - Mỗi câu trong sentences phải có nội dung đầy đủ
+    - Mỗi câu trong sentences phải có nội dung gốc (text) và bản dịch Tiếng Việt (translation)
     - timestamps phải chính xác theo thứ tự xuất hiện trong audio
     - vocabulary chọn 5-10 từ mới, trung bình khó, hữu ích cho người học ngôn ngữ
     - Chỉ trả về JSON, không giải thích gì thêm
@@ -159,7 +178,7 @@ function getMediaDuration(filePath) {
 
 exports.analyzeYouTube = async (req, res) => {
     try {
-        const { youtubeUrl, difficulty, language, title } = req.body;
+        const { youtubeUrl, difficulty, language, title, srtContent } = req.body;
 
         if (!youtubeUrl) {
             return res.status(400).json({ error: 'Vui lòng nhập URL YouTube' });
@@ -194,26 +213,39 @@ exports.analyzeYouTube = async (req, res) => {
         const videoTitle = title || videoInfo.title;
         const duration = parseInt(videoInfo.duration || 0);
 
-        // Download audio và lưu tạm
-        const tempFilePath = path.join(__dirname, '../..', 'uploads', `youtube_${videoId}.m4a`);
+        let result;
+        if (srtContent && srtContent.trim()) {
+            const parsedSrt = parseSrtText(srtContent);
+            const textAnalysis = await analyzeTextWithGemini(parsedSrt.transcript, aiModel);
+            result = {
+                duration: duration,
+                analysis: {
+                    ...parsedSrt,
+                    ...textAnalysis
+                }
+            };
+        } else {
+            // Download audio và lưu tạm
+            const tempFilePath = path.join(__dirname, '../..', 'uploads', `youtube_${videoId}.m4a`);
 
-        try {
-            await youtubedl(youtubeUrl, {
-                format: 'm4a/bestaudio/best',
-                output: tempFilePath,
-                noWarnings: true,
-                noCheckCertificate: true
-            });
-        } catch (downloadError) {
-            console.error('Lỗi khi tải audio từ video YouTube:\n', downloadError);
-            return res.status(500).json({ error: 'Trích xuất âm thanh từ YouTube thất bại. Vui lòng thử lại sau.' });
+            try {
+                await youtubedl(youtubeUrl, {
+                    format: 'm4a/bestaudio/best',
+                    output: tempFilePath,
+                    noWarnings: true,
+                    noCheckCertificate: true
+                });
+            } catch (downloadError) {
+                console.error('Lỗi khi tải audio từ video YouTube:\n', downloadError);
+                return res.status(500).json({ error: 'Trích xuất âm thanh từ YouTube thất bại. Vui lòng thử lại sau.' });
+            }
+
+            // Phân tích với AI
+            result = await analyzeWithGemini(tempFilePath, 'audio/mp4', aiModel);
+
+            // Xóa file tạm
+            fs.existsSync(tempFilePath) && fs.unlinkSync(tempFilePath);
         }
-
-        // Phân tích với AI
-        const result = await analyzeWithGemini(tempFilePath, 'audio/mp4', aiModel);
-
-        // Xóa file tạm
-        fs.existsSync(tempFilePath) && fs.unlinkSync(tempFilePath);
 
         // Trả về kết quả
         res.json({
@@ -239,6 +271,158 @@ function extractYouTubeId(url) {
 }
 
 // ============================================
+// HỖ TRỢ PHÂN TÍCH SRT HOẶC VĂN BẢN TRỰC TIẾP
+// ============================================
+
+function parseSrtText(srtContent) {
+    const blocks = srtContent.trim().replace(/\r\n/g, '\n').split(/\n\s*\n/);
+    const rawSegments = [];
+    let transcript = '';
+
+    for (const block of blocks) {
+        const lines = block.split('\n');
+        if (lines.length >= 3) {
+            const timeLine = lines[1];
+            const textLines = lines.slice(2).join(' ');
+
+            const times = timeLine.split(' --> ');
+            if (times.length === 2) {
+                const startTime = parseSrtTime(times[0]);
+                const endTime = parseSrtTime(times[1]);
+                const text = textLines.replace(/<[^>]*>/g, '').trim();
+
+                rawSegments.push({ text, startTime, endTime });
+                transcript += text + ' ';
+            }
+        }
+    }
+
+    // Merge logic: Gộp các câu thông minh hơn dựa trên nhiều yếu tố
+    const sentences = [];
+    let currentSentence = null;
+
+    for (let i = 0; i < rawSegments.length; i++) {
+        const seg = rawSegments[i];
+
+        if (!currentSentence) {
+            currentSentence = { ...seg };
+        } else {
+            const prevText = currentSentence.text.trim();
+            const nextText = seg.text.trim();
+
+            // Kiểm tra xem câu trước đó có kết thúc bằng chuỗi ngắt câu không (. ! ?)
+            const endsWithPunctuation = /[.!?]["']?$/.test(prevText);
+            const endsWithComma = /,["']?$/.test(prevText);
+            const timeGap = seg.startTime - currentSentence.endTime;
+            const currentDuration = currentSentence.endTime - currentSentence.startTime;
+
+            // Đếm số từ (ước lượng)
+            const wordCount = prevText.split(/\s+/).length;
+
+            // Các heuristic để quyết định gộp
+            const isTooShort = currentDuration < 2.0 || wordCount <= 3;
+            const isSmallGap = timeGap < 1.0;
+            const isLongGap = timeGap >= 1.5;
+            // Kiểm tra xem câu tiếp sau có bắt đầu bằng chữ thường không
+            const nextStartsLowerCase = /^[a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹ]/.test(nextText);
+
+            let shouldMerge = false;
+
+            if (isLongGap && endsWithPunctuation && !isTooShort) {
+                // Gap dài và đã hết câu -> không gộp
+                shouldMerge = false;
+            } else if (endsWithComma && timeGap < 1.5) {
+                // Kết thúc bằng dấu phẩy -> gộp
+                shouldMerge = true;
+            } else if (!endsWithPunctuation) {
+                // Chưa hết câu -> gộp (trừ khi gap quá vô lý, vd: > 3s)
+                shouldMerge = timeGap < 3.0;
+            } else if (endsWithPunctuation && isTooShort && isSmallGap) {
+                // Câu quá ngắn (vd: "Yes.", "Ok.") -> gộp với câu sau
+                shouldMerge = true;
+            } else if (endsWithPunctuation && nextStartsLowerCase && timeGap < 1.5) {
+                // Dấu chấm có thể bị sai do AI tạo SRT -> gộp vì câu sau bắt đầu bằng chữ thường
+                shouldMerge = true;
+            }
+
+            // Giới hạn an toàn: không gộp thành câu quá dài (vd: > 250 ký tự) hoặc duration quá dài (vd: > 15s)
+            const mergedLength = currentSentence.text.length + nextText.length;
+            const mergedDuration = seg.endTime - currentSentence.startTime;
+
+            if (shouldMerge && (mergedLength > 250 || mergedDuration > 15)) {
+                shouldMerge = false;
+            }
+
+            if (shouldMerge) {
+                currentSentence.text += ' ' + nextText;
+                currentSentence.endTime = seg.endTime;
+            } else {
+                sentences.push(currentSentence);
+                currentSentence = { ...seg };
+            }
+        }
+    }
+
+    if (currentSentence) {
+        sentences.push(currentSentence);
+    }
+
+    return { transcript: transcript.trim(), sentences };
+}
+
+function parseSrtTime(timeStr) {
+    const parts = timeStr.trim().split(':');
+    if (parts.length === 3) {
+        const hours = parseInt(parts[0], 10);
+        const minutes = parseInt(parts[1], 10);
+        const secParts = parts[2].split(',');
+        const seconds = parseInt(secParts[0], 10);
+        const ms = parseInt(secParts[1], 10) || 0;
+        return hours * 3600 + minutes * 60 + seconds + ms / 1000;
+    }
+    return 0;
+}
+
+async function analyzeTextWithGemini(transcript, aiModel = 'gemini-1.5-flash') {
+    const model = genAI.getGenerativeModel({ model: aiModel });
+
+    const prompt = `
+    Phân tích đoạn văn bản sau và trả về JSON với cấu trúc chính xác như sau:
+
+    {
+      "summary": "Tóm tắt 2-3 câu về nội dung chính của đoạn văn bản",
+      "vocabulary": ["từ1", "từ2", "từ3", "từ4", "từ5"]
+    }
+
+    Yêu cầu:
+    - vocabulary chọn 5-10 từ mới, trung bình khó, hữu ích cho người học ngôn ngữ có xuất hiện trong văn bản
+    - Chỉ trả về JSON, không giải thích gì thêm
+
+    Văn bản:
+    "${transcript}"
+    `;
+
+    const response = await model.generateContent(prompt);
+    const text = response.response.text();
+
+    let analysis;
+    try {
+        const cleanText = text.replace(/```json\n?|\n?```/g, '').trim();
+        analysis = JSON.parse(cleanText);
+    } catch (e) {
+        const summaryMatch = text.match(/"summary":\s*"([^"]+)"/);
+        const vocabMatch = text.match(/"vocabulary":\s*\[([^\]]+)\]/);
+
+        analysis = {
+            summary: summaryMatch ? summaryMatch[1] : '',
+            vocabulary: vocabMatch ? vocabMatch[1].split(',').map(w => w.trim().replace(/"/g, '')) : []
+        };
+    }
+
+    return analysis;
+}
+
+// ============================================
 // CÁCH 3 & 4: Lưu Bài Học (Chung)
 // ============================================
 
@@ -255,7 +439,9 @@ exports.saveDictation = async (req, res) => {
             language,
             sourceType,
             sourceUrl,
-            duration
+            duration,
+            category,
+            tags
         } = req.body;
 
         const userId = req.user.id;
@@ -282,6 +468,8 @@ exports.saveDictation = async (req, res) => {
                 sourceType: sourceType || 'manual',
                 sourceUrl: sourceUrl || null,
                 duration: duration ? parseInt(duration) : null,
+                category: category || 'General',
+                tags: tags || [],
                 userId
             }
         });
@@ -303,12 +491,18 @@ exports.saveDictation = async (req, res) => {
 
 exports.getAllDictations = async (req, res) => {
     try {
-        const { language, difficulty, search } = req.query;
+        const { language, difficulty, search, category, tags } = req.query;
         const userId = req.user.id;
 
         const where = { userId };
         if (language) where.language = language;
         if (difficulty) where.difficulty = difficulty;
+        if (category) where.category = category;
+        if (tags) {
+            // Assume tags is passed as a comma-separated string e.g "tag1,tag2"
+            const tagsArray = tags.split(',').map(tag => tag.trim());
+            where.tags = { hasEvery: tagsArray };
+        }
         if (search) {
             where.title = { contains: search, mode: 'insensitive' };
         }
@@ -324,6 +518,8 @@ exports.getAllDictations = async (req, res) => {
                 language: true,
                 sourceType: true,
                 duration: true,
+                category: true,
+                tags: true,
                 createdAt: true,
                 _count: { select: { attempts: true } }
             }
@@ -393,7 +589,7 @@ exports.updateDictation = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user.id;
-        const { title, difficulty, language, transcript, sentences, vocabulary, summary } = req.body;
+        const { title, difficulty, language, transcript, sentences, vocabulary, summary, category, tags } = req.body;
 
         // Kiểm tra quyền sở hữu
         const dictation = await prisma.dictation.findFirst({
@@ -413,7 +609,9 @@ exports.updateDictation = async (req, res) => {
                 transcript: transcript || dictation.transcript,
                 sentences: sentences ? sentences : dictation.sentences,
                 vocabulary: vocabulary ? vocabulary : dictation.vocabulary,
-                summary: summary || dictation.summary
+                summary: summary || dictation.summary,
+                category: category || dictation.category,
+                tags: tags !== undefined ? tags : dictation.tags
             }
         });
 
