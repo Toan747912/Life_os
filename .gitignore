@@ -47,3 +47,5 @@ life-os-frontend/node_modules/
 life-os-backend/node_modules/
 life-os-backend/uploads/
 *.mp4
+tree_sizes.txt
+status.json

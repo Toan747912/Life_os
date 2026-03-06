@@ -19,11 +19,27 @@ const createLearningResource = async (userId, textContent, title, modelId = null
       const { analyzeMediaWithGemini } = require('./ai.service');
       aiResult = await analyzeMediaWithGemini(textContent, modelId);
 
-      // Do not clean up the temporary file, we need it for playback
-      // const fs = require('fs');
-      // if (fs.existsSync(textContent)) {
-      //   fs.unlinkSync(textContent);
-      // }
+      // -- TÍCH HỢP SUPABASE --
+      try {
+        if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+          const { uploadFileToSupabase } = require('../utils/supabaseStorage');
+          const path = require('path');
+          const mime = require('mime-types').lookup(textContent) || 'application/octet-stream';
+          console.log(`☁️ Đang upload file Media lên Supabase...`);
+          const publicUrl = await uploadFileToSupabase(textContent, path.basename(textContent), mime);
+          console.log(`✅ Upload Supabase thành công: ${publicUrl}`);
+
+          // Xóa file local sau khi upload xong
+          const fs = require('fs');
+          if (fs.existsSync(textContent)) {
+            fs.unlinkSync(textContent);
+          }
+          // Ghi đè biến để dùng URL public cho đường dẫn lưu vào DB
+          textContent = publicUrl;
+        }
+      } catch (uploadError) {
+        console.error('Lỗi khi upload lên Supabase, giữ lại file local:', uploadError);
+      }
     } else {
       console.log(`🤖 [1/3] Đang gửi cho Gemini phân tích (Model: ${modelId || 'default'})...`);
       aiResult = await analyzeTextWithGemini(textContent, modelId);
@@ -66,7 +82,8 @@ const createLearningResource = async (userId, textContent, title, modelId = null
     const result = await prisma.$transaction(async (tx) => {
       // A. Tạo Resource và LearningItems cùng lúc
       const path = require('path');
-      const relativeFilePath = type === 'MEDIA' ? `uploads/${path.basename(textContent)}` : null;
+      const isCloudUrl = textContent && textContent.startsWith('http');
+      const relativeFilePath = type === 'MEDIA' ? (isCloudUrl ? textContent : `uploads/${path.basename(textContent)}`) : null;
 
       const newResource = await tx.resource.create({
         data: {

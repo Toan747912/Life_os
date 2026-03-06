@@ -56,10 +56,27 @@ exports.analyzeAudio = async (req, res) => {
             result = await analyzeWithGemini(filePath, mimeType, aiModel);
         }
 
+        // --- INTEGRATE SUPABASE (MỚI) ---
+        let finalFileUrl = fileUrl; // Default to local URL
+        try {
+            if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+                const { uploadFileToSupabase } = require('../utils/supabaseStorage');
+                console.log(`☁️ Đang upload ${req.file.originalname} lên Supabase...`);
+                finalFileUrl = await uploadFileToSupabase(filePath, req.file.originalname, mimeType);
+                console.log(`✅ Upload Supabase thành công: ${finalFileUrl}`);
+                // Sau khi upload thành công lên Supabase thì xóa file local
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            }
+        } catch (uploadError) {
+            console.error('Lỗi khi upload lên Supabase, dùng file local:', uploadError);
+        }
+
         // Trả về kết quả để user xác nhận
         res.json({
             success: true,
-            filePath: fileUrl,
+            filePath: finalFileUrl,
             fileName: req.file.originalname,
             fileSize: req.file.size,
             duration: result.duration,
